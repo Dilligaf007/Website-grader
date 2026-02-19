@@ -6,7 +6,7 @@ A Python 3.11 script set for grading business websites and exporting CSV reports
 
 - Grades a predefined list of URLs from `websites.txt`
 - Finds local businesses from OpenStreetMap (Overpass) and grades discovered websites
-- Uses Nominatim geocoding to convert a city name into a search bounding box
+- Uses Nominatim geocoding to convert a city name into a center point for radius-based Overpass search
 - Parses HTML with `beautifulsoup4`
 - If a contact page link is found on the homepage, fetches that contact page too
 - Uses homepage + contact page content together for lead signals:
@@ -45,11 +45,21 @@ Optional arguments:
 
 - `--query` (default: `plumber`)
 - `--limit` (default: `50`)
+- `--radius_km` (default: `15`)
+- `--overpass_timeout` (default: `180`)
 
 Example with custom query and limit:
 
 ```bash
 python find_and_grade.py --city "Seattle, WA" --query "plumber" --limit 25
+```
+
+For larger lead counts (for example `--limit 200`), tune `--radius_km` to keep Overpass queries focused and reduce timeout risk.
+
+Example (200 leads):
+
+```bash
+python find_and_grade.py --city "Austin, TX" --limit 200 --radius_km 20
 ```
 
 Outputs:
