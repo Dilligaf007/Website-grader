@@ -300,8 +300,6 @@ def as_float(value: object) -> Optional[float]:
 
 
 def write_priority_leads(rows: List[Dict[str, object]], output_path: str) -> int:
-    has_phone_column = any("has_phone" in row for row in rows)
-
     actionable_rows: List[Dict[str, object]] = []
     for row in rows:
         if not as_bool(row.get("reachable", False)):
@@ -311,9 +309,6 @@ def write_priority_leads(rows: List[Dict[str, object]], output_path: str) -> int
 
         opportunity_score = as_float(row.get("opportunity_score_0_100"))
         if opportunity_score is None or opportunity_score <= 0:
-            continue
-
-        if has_phone_column and not as_bool(row.get("has_phone", False)):
             continue
 
         actionable_rows.append(row)
@@ -346,8 +341,13 @@ def main() -> None:
 
     write_report(rows, OUTPUT_FILE)
     priority_count = write_priority_leads(rows, PRIORITY_OUTPUT_FILE)
+    missing_phone_count = sum(1 for row in rows if not as_bool(row.get("has_phone", False)))
+
     print(f"Graded {len(rows)} website(s). Report saved to {OUTPUT_FILE}.")
     print(f"Created {PRIORITY_OUTPUT_FILE} with {priority_count} prioritized leads.")
+    print(f"Total graded websites: {len(rows)}")
+    print(f"Included in {PRIORITY_OUTPUT_FILE}: {priority_count}")
+    print(f"Missing phone: {missing_phone_count}")
 
 
 if __name__ == "__main__":
