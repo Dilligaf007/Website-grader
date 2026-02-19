@@ -58,6 +58,7 @@ Outputs:
 - `report.csv`: website grading report for leads that have websites, with leading source columns:
   - `business_name`, `phone`, `address`, `lat`, `lon`, `source`, `source_id`
   - followed by grading columns (`url`, `reachable`, `https`, `status_code`, etc.)
+- `priority_leads.csv`: filtered high-opportunity leads from `report.csv` where `reachable=True`, `has_phone=True`, URL is present, and `opportunity_score_0_100 > 0`; sorted by `opportunity_score_0_100` descending and limited to outreach-focused columns (`business_name`, `phone`, `url`, `opportunity_score_0_100`, `score_0_100`, `reasons`, `pitch`).
 
 The OSM pipeline applies basic deduping by:
 
