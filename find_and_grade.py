@@ -11,8 +11,8 @@ from main import MAX_WORKERS, grade_website
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-USER_AGENT = "WebsiteGrader-FindAndGrade/1.0 (contact: support@example.com)"
-NOMINATIM_EMAIL = "support@example.com"
+USER_AGENT = "WebsiteGrader-FindAndGrade/1.0 (contact: nathan.strickland.consult@gmail.com)"
+NOMINATIM_EMAIL = "nathan.strickland.consult@gmail.com"
 REQUEST_DELAY_SECONDS = 1.0
 RAW_OUTPUT_FILE = "leads_raw.csv"
 GRADED_OUTPUT_FILE = "report.csv"
