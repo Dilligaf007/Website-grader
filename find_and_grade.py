@@ -277,10 +277,37 @@ def build_priority_row(row: Dict[str, object]) -> Dict[str, object]:
     }
 
 
+def normalize_rows(rows: object) -> List[Dict[str, object]]:
+    if isinstance(rows, dict):
+        values = list(rows.values())
+        if all(isinstance(value, dict) for value in values):
+            return values
+        example_value = values[0] if values else None
+        raise TypeError(
+            "write_priority_leads expected rows to be a list of dicts (or a dict of dicts); "
+            f"got dict with value type {type(example_value).__name__}. Example value: {example_value!r}"
+        )
+
+    if isinstance(rows, list):
+        if all(isinstance(row, dict) for row in rows):
+            return rows
+        example_row = rows[0] if rows else None
+        raise TypeError(
+            "write_priority_leads expected rows to be a list of dicts; "
+            f"got list with element type {type(example_row).__name__}. Example element: {example_row!r}"
+        )
+
+    raise TypeError(
+        "write_priority_leads expected rows to be a list of dicts (or a dict of dicts); "
+        f"got {type(rows).__name__}. Example value: {rows!r}"
+    )
+
+
 def write_priority_leads(path: str, rows: List[Dict[str, object]]) -> int:
+    normalized_rows = normalize_rows(rows)
     filtered_rows = [
         row
-        for row in rows
+        for row in normalized_rows
         if is_true(row.get("reachable"))
         and is_true(row.get("has_phone"))
         and str(row.get("url", "")).strip()
@@ -352,7 +379,7 @@ def main() -> None:
         for lead, graded in zip(leads_with_websites, graded_rows)
     ]
     write_graded_report(GRADED_OUTPUT_FILE, report_rows)
-    priority_count = write_priority_leads(report_rows, PRIORITY_OUTPUT_FILE)
+    priority_count = write_priority_leads(path=PRIORITY_OUTPUT_FILE, rows=report_rows)
 
     missing_phone_count = sum(1 for row in report_rows if not str(row.get("phone", "")).strip())
 
