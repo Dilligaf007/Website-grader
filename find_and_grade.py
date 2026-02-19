@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import requests
 
-from main import MAX_WORKERS, grade_website
+from main import MAX_WORKERS, PRIORITY_OUTPUT_FILE, grade_website, write_priority_leads
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -245,11 +245,13 @@ def main() -> None:
         for lead, graded in zip(leads_with_websites, graded_rows)
     ]
     write_graded_report(GRADED_OUTPUT_FILE, report_rows)
+    priority_count = write_priority_leads(report_rows, PRIORITY_OUTPUT_FILE)
 
     print(f"Found {len(leads)} unique lead(s). Raw leads saved to {RAW_OUTPUT_FILE}.")
     print(
         f"Graded {len(report_rows)} lead(s) with websites. Report saved to {GRADED_OUTPUT_FILE}."
     )
+    print(f"Created {PRIORITY_OUTPUT_FILE} with {priority_count} prioritized leads.")
 
 
 if __name__ == "__main__":
