@@ -187,35 +187,50 @@ def build_graded_row(lead: Dict[str, object], graded: Dict[str, object]) -> Dict
 
 
 def write_graded_report(path: str, rows: List[Dict[str, object]]) -> None:
+    ordered_fieldnames = [
+        "business_name",
+        "phone",
+        "address",
+        "lat",
+        "lon",
+        "source",
+        "source_id",
+        "url",
+        "reachable",
+        "https",
+        "status_code",
+        "final_url",
+        "title",
+        "meta_description_present",
+        "has_phone",
+        "has_email",
+        "has_contact_page_link",
+        "contact_page_url",
+        "contact_page_reachable",
+        "notes",
+        "reasons",
+        "score_0_100",
+    ]
+
+    for row in rows:
+        row.setdefault("opportunity_score_0_100", 0)
+        row.setdefault("pitch", "")
+
     if not rows:
         fieldnames = [
-            "business_name",
-            "phone",
-            "address",
-            "lat",
-            "lon",
-            "source",
-            "source_id",
-            "url",
-            "reachable",
-            "https",
-            "status_code",
-            "final_url",
-            "title",
-            "meta_description_present",
-            "has_phone",
-            "has_email",
-            "has_contact_page_link",
-            "contact_page_url",
-            "contact_page_reachable",
-            "notes",
-            "reasons",
-            "score_0_100",
+            *ordered_fieldnames,
             "opportunity_score_0_100",
             "pitch",
         ]
     else:
-        fieldnames = list(rows[0].keys())
+        fieldnames = [
+            *ordered_fieldnames,
+            *[
+                field
+                for field in ("opportunity_score_0_100", "pitch")
+                if field not in ordered_fieldnames
+            ],
+        ]
 
     with open(path, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)

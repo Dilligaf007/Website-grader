@@ -225,6 +225,68 @@ def build_reasons(row: Dict[str, object]) -> str:
     return "; ".join(reasons)
 
 
+def calculate_opportunity_score(score_0_100: int, reasons: str, reachable: bool) -> int:
+    """Estimate sales opportunity from technical score and gaps.
+
+    Lower quality websites indicate higher opportunity, but unreachable sites are excluded.
+    """
+    if not reachable:
+        return 0
+
+    reason_set = {reason.strip() for reason in reasons.split(";") if reason.strip()}
+    opportunity_score = max(0, 100 - score_0_100)
+
+    # Emphasize lead-gen gaps that are easier to fix and good outreach hooks.
+    if "missing_contact_page_link" in reason_set:
+        opportunity_score += 10
+    if "missing_phone" in reason_set:
+        opportunity_score += 8
+    if "missing_email" in reason_set:
+        opportunity_score += 8
+    if "missing_meta_description" in reason_set:
+        opportunity_score += 5
+    if "missing_title" in reason_set:
+        opportunity_score += 4
+    if "missing_https" in reason_set:
+        opportunity_score += 5
+    if "bad_status_code" in reason_set:
+        opportunity_score += 7
+    if "contact_page_unreachable" in reason_set:
+        opportunity_score += 5
+
+    return max(0, min(100, int(opportunity_score)))
+
+
+def build_pitch(row: Dict[str, object]) -> str:
+    if not row["reachable"]:
+        return ""
+
+    gaps: List[str] = []
+    if not row["has_contact_page_link"]:
+        gaps.append("a clear contact page")
+    if not row["has_phone"]:
+        gaps.append("a visible phone number")
+    if not row["has_email"]:
+        gaps.append("a visible email address")
+    if not row["meta_description_present"]:
+        gaps.append("an SEO-ready meta description")
+    if not row["https"]:
+        gaps.append("HTTPS security")
+
+    if not gaps:
+        return "Your site is in strong shape overall—small conversion-focused tweaks could still increase lead volume."
+
+    if len(gaps) == 1:
+        gap_text = gaps[0]
+    else:
+        gap_text = ", ".join(gaps[:-1]) + f", and {gaps[-1]}"
+
+    return (
+        f"I noticed your website is missing {gap_text}, which can reduce trust and inbound leads. "
+        "We can fix these quickly to help turn more visitors into booked jobs."
+    )
+
+
 def grade_website(url: str) -> Dict[str, object]:
     normalized_url = normalize_url(url)
     result: Dict[str, object] = {
@@ -301,6 +363,12 @@ def grade_website(url: str) -> Dict[str, object]:
     result["opportunity_score_0_100"] = calculate_opportunity_score(result)
     result["pitch"] = build_pitch(result)
     result["reasons"] = build_reasons(result)
+    result["opportunity_score_0_100"] = calculate_opportunity_score(
+        int(result["score_0_100"]),
+        str(result["reasons"]),
+        bool(result["reachable"]),
+    )
+    result["pitch"] = build_pitch(result)
     return result
 
 
