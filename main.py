@@ -174,7 +174,7 @@ def build_reasons(row: Dict[str, object]) -> str:
 
 
 def calculate_opportunity_score(row: Dict[str, object]) -> int:
-    opportunity_score = 100
+    opportunity_score = 0
 
     score_raw = row.get("score_0_100", 0)
     try:
@@ -183,13 +183,19 @@ def calculate_opportunity_score(row: Dict[str, object]) -> int:
         score_0_100 = 0
 
     if not row.get("has_email", False):
-        opportunity_score -= 20
+        opportunity_score += 25
     if not row.get("has_contact_page_link", False):
-        opportunity_score -= 15
+        opportunity_score += 25
     if not row.get("meta_description_present", False):
-        opportunity_score -= 10
+        opportunity_score += 15
+    if not row.get("has_phone", False):
+        opportunity_score += 15
+    if score_0_100 < 70:
+        opportunity_score += 20
+    elif 70 <= score_0_100 <= 80:
+        opportunity_score += 10
     if score_0_100 > 90:
-        opportunity_score -= 15
+        opportunity_score -= 20
 
     return max(0, min(100, int(opportunity_score)))
 
