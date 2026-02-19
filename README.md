@@ -6,7 +6,7 @@ A Python 3.11 script set for grading business websites and exporting CSV reports
 
 - Grades a predefined list of URLs from `websites.txt`
 - Finds local businesses from OpenStreetMap (Overpass) and grades discovered websites
-- Uses Nominatim geocoding to convert a city name into a search bounding box
+- Uses Nominatim geocoding to convert a city name into a center point for radius-based Overpass search
 - Parses HTML with `beautifulsoup4`
 - If a contact page link is found on the homepage, fetches that contact page too
 - Uses homepage + contact page content together for lead signals:
@@ -33,7 +33,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-After running, `report.csv` will be created in the project directory.
+After running, `report.csv` and `priority_leads.csv` will be created in the project directory. Use `priority_leads.csv` for first-pass outreach.
 
 ## Run: find and grade plumbers from OpenStreetMap
 
@@ -45,11 +45,21 @@ Optional arguments:
 
 - `--query` (default: `plumber`)
 - `--limit` (default: `50`)
+- `--radius_km` (default: `15`)
+- `--overpass_timeout` (default: `180`)
 
 Example with custom query and limit:
 
 ```bash
 python find_and_grade.py --city "Seattle, WA" --query "plumber" --limit 25
+```
+
+For larger lead counts (for example `--limit 200`), tune `--radius_km` to keep Overpass queries focused and reduce timeout risk.
+
+Example (200 leads):
+
+```bash
+python find_and_grade.py --city "Austin, TX" --limit 200 --radius_km 20
 ```
 
 Outputs:
@@ -58,7 +68,8 @@ Outputs:
 - `report.csv`: website grading report for leads that have websites, with leading source columns:
   - `business_name`, `phone`, `address`, `lat`, `lon`, `source`, `source_id`
   - followed by grading columns (`url`, `reachable`, `https`, `status_code`, etc.)
-- `priority_leads.csv`: filtered high-opportunity leads from `report.csv` where `reachable=True`, `has_phone=True`, URL is present, and `opportunity_score_0_100 > 0`; sorted by `opportunity_score_0_100` descending and limited to outreach-focused columns (`business_name`, `phone`, `url`, `opportunity_score_0_100`, `score_0_100`, `reasons`, `pitch`).
+  - includes outreach columns: `opportunity_score_0_100` and `pitch`
+- `priority_leads.csv`: outreach-ready subset of actionable leads, filtered and sorted by `opportunity_score_0_100` (highest first). Start calling from this file first when planning outreach.
 
 The OSM pipeline applies basic deduping by:
 

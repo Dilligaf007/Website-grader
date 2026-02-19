@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 
 INPUT_FILE = "websites.txt"
 OUTPUT_FILE = "report.csv"
+PRIORITY_OUTPUT_FILE = "priority_leads.csv"
 TIMEOUT_SECONDS = 10
 MAX_WORKERS = 8
 USER_AGENT = "WebsiteGrader/1.0"
@@ -30,6 +31,70 @@ PHONE_PATTERN = re.compile(
 EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 DATE_LIKE_PATTERN = re.compile(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b")
 ZIP_PATTERN = re.compile(r"\b\d{5}(?:-\d{4})?\b")
+
+PRIORITY_FIELDNAMES = [
+    "business_name",
+    "phone",
+    "address",
+    "url",
+    "opportunity_score_0_100",
+    "score_0_100",
+    "reasons",
+    "pitch",
+]
+
+
+def calculate_opportunity_score(row: Dict[str, object]) -> int:
+    """Estimate outreach opportunity from website gaps (0-100)."""
+    if not row.get("reachable"):
+        return 0
+
+    opportunity = 0
+    if not row.get("https"):
+        opportunity += 15
+
+    status_code = row.get("status_code")
+    if not (isinstance(status_code, int) and 200 <= status_code < 400):
+        opportunity += 10
+
+    if not row.get("title"):
+        opportunity += 20
+    if not row.get("meta_description_present"):
+        opportunity += 15
+    if not row.get("has_phone"):
+        opportunity += 15
+    if not row.get("has_email"):
+        opportunity += 10
+    if not row.get("has_contact_page_link"):
+        opportunity += 15
+
+    return min(100, opportunity)
+
+
+def build_pitch(row: Dict[str, object]) -> str:
+    """Create a concise outreach pitch based on detected website gaps."""
+    if not row.get("reachable"):
+        return ""
+
+    improvements: List[str] = []
+    if not row.get("https"):
+        improvements.append("secure HTTPS setup")
+    if not row.get("title"):
+        improvements.append("clear page titles")
+    if not row.get("meta_description_present"):
+        improvements.append("stronger search snippets")
+    if not row.get("has_phone"):
+        improvements.append("prominent click-to-call")
+    if not row.get("has_email"):
+        improvements.append("better lead capture")
+    if not row.get("has_contact_page_link"):
+        improvements.append("an easy-to-find contact page")
+
+    if not improvements:
+        return "Website looks strong overall; we can help improve conversion rate and local SEO performance."
+
+    top_improvements = ", ".join(improvements[:3])
+    return f"We can quickly improve {top_improvements} to help generate more qualified leads."
 
 
 def normalize_url(url: str) -> str:
@@ -160,6 +225,68 @@ def build_reasons(row: Dict[str, object]) -> str:
     return "; ".join(reasons)
 
 
+def calculate_opportunity_score(score_0_100: int, reasons: str, reachable: bool) -> int:
+    """Estimate sales opportunity from technical score and gaps.
+
+    Lower quality websites indicate higher opportunity, but unreachable sites are excluded.
+    """
+    if not reachable:
+        return 0
+
+    reason_set = {reason.strip() for reason in reasons.split(";") if reason.strip()}
+    opportunity_score = max(0, 100 - score_0_100)
+
+    # Emphasize lead-gen gaps that are easier to fix and good outreach hooks.
+    if "missing_contact_page_link" in reason_set:
+        opportunity_score += 10
+    if "missing_phone" in reason_set:
+        opportunity_score += 8
+    if "missing_email" in reason_set:
+        opportunity_score += 8
+    if "missing_meta_description" in reason_set:
+        opportunity_score += 5
+    if "missing_title" in reason_set:
+        opportunity_score += 4
+    if "missing_https" in reason_set:
+        opportunity_score += 5
+    if "bad_status_code" in reason_set:
+        opportunity_score += 7
+    if "contact_page_unreachable" in reason_set:
+        opportunity_score += 5
+
+    return max(0, min(100, int(opportunity_score)))
+
+
+def build_pitch(row: Dict[str, object]) -> str:
+    if not row["reachable"]:
+        return ""
+
+    gaps: List[str] = []
+    if not row["has_contact_page_link"]:
+        gaps.append("a clear contact page")
+    if not row["has_phone"]:
+        gaps.append("a visible phone number")
+    if not row["has_email"]:
+        gaps.append("a visible email address")
+    if not row["meta_description_present"]:
+        gaps.append("an SEO-ready meta description")
+    if not row["https"]:
+        gaps.append("HTTPS security")
+
+    if not gaps:
+        return "Your site is in strong shape overall—small conversion-focused tweaks could still increase lead volume."
+
+    if len(gaps) == 1:
+        gap_text = gaps[0]
+    else:
+        gap_text = ", ".join(gaps[:-1]) + f", and {gaps[-1]}"
+
+    return (
+        f"I noticed your website is missing {gap_text}, which can reduce trust and inbound leads. "
+        "We can fix these quickly to help turn more visitors into booked jobs."
+    )
+
+
 def grade_website(url: str) -> Dict[str, object]:
     normalized_url = normalize_url(url)
     result: Dict[str, object] = {
@@ -178,6 +305,8 @@ def grade_website(url: str) -> Dict[str, object]:
         "notes": "",
         "reasons": "",
         "score_0_100": 0,
+        "opportunity_score_0_100": 0,
+        "pitch": "",
     }
 
     if not normalized_url:
@@ -231,7 +360,15 @@ def grade_website(url: str) -> Dict[str, object]:
         result["notes"] = f"Unexpected error: {exc}"
 
     result["score_0_100"] = calculate_score(result)
+    result["opportunity_score_0_100"] = calculate_opportunity_score(result)
+    result["pitch"] = build_pitch(result)
     result["reasons"] = build_reasons(result)
+    result["opportunity_score_0_100"] = calculate_opportunity_score(
+        int(result["score_0_100"]),
+        str(result["reasons"]),
+        bool(result["reachable"]),
+    )
+    result["pitch"] = build_pitch(result)
     return result
 
 
@@ -262,12 +399,64 @@ def write_report(rows: List[Dict[str, object]], output_path: str) -> None:
         "notes",
         "reasons",
         "score_0_100",
+        "opportunity_score_0_100",
+        "pitch",
     ]
 
     with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return bool(value)
+
+
+def as_float(value: object) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def write_priority_leads(rows: List[Dict[str, object]], output_path: str) -> int:
+    actionable_rows: List[Dict[str, object]] = []
+    for row in rows:
+        if not as_bool(row.get("reachable", False)):
+            continue
+        if not str(row.get("url", "")).strip():
+            continue
+
+        opportunity_score = as_float(row.get("opportunity_score_0_100"))
+        if opportunity_score is None or opportunity_score <= 0:
+            continue
+
+        actionable_rows.append(row)
+
+    sorted_rows = sorted(
+        actionable_rows,
+        key=lambda row: as_float(row.get("opportunity_score_0_100")) or 0.0,
+        reverse=True,
+    )
+
+    priority_rows = [
+        {field: row.get(field, "") for field in PRIORITY_FIELDNAMES}
+        for row in sorted_rows
+    ]
+
+    with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=PRIORITY_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(priority_rows)
+
+    return len(priority_rows)
 
 
 def main() -> None:
@@ -278,7 +467,14 @@ def main() -> None:
         rows = list(executor.map(grade_website, websites))
 
     write_report(rows, OUTPUT_FILE)
+    priority_count = write_priority_leads(rows, PRIORITY_OUTPUT_FILE)
+    missing_phone_count = sum(1 for row in rows if not as_bool(row.get("has_phone", False)))
+
     print(f"Graded {len(rows)} website(s). Report saved to {OUTPUT_FILE}.")
+    print(f"Created {PRIORITY_OUTPUT_FILE} with {priority_count} prioritized leads.")
+    print(f"Total graded websites: {len(rows)}")
+    print(f"Included in {PRIORITY_OUTPUT_FILE}: {priority_count}")
+    print(f"Missing phone: {missing_phone_count}")
 
 
 if __name__ == "__main__":

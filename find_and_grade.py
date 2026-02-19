@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import requests
 
-from main import MAX_WORKERS, grade_website
+from main import MAX_WORKERS, PRIORITY_OUTPUT_FILE, grade_website, write_priority_leads
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -26,7 +26,7 @@ def clean_whitespace(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def get_city_bbox(city: str) -> Tuple[float, float, float, float]:
+def get_city_center(city: str) -> Tuple[float, float]:
     time.sleep(1)
     params = {"q": city, "format": "json", "limit": 1, "email": NOMINATIM_EMAIL}
     headers = {"User-Agent": USER_AGENT, "Accept-Language": "en"}
@@ -46,22 +46,23 @@ def get_city_bbox(city: str) -> Tuple[float, float, float, float]:
     if not payload:
         raise ValueError(f"Could not geocode city: {city}")
 
-    bbox = payload[0].get("boundingbox")
-    if not bbox or len(bbox) != 4:
-        raise ValueError(f"City geocoding did not return a valid bounding box: {city}")
+    lat = payload[0].get("lat")
+    lon = payload[0].get("lon")
+    if lat is None or lon is None:
+        raise ValueError(f"City geocoding did not return a valid center point: {city}")
 
-    south, north, west, east = map(float, bbox)
-    return south, west, north, east
+    return float(lat), float(lon)
 
 
-def build_overpass_query(south: float, west: float, north: float, east: float, query: str) -> str:
+def build_overpass_query(lat: float, lon: float, radius_km: float, query: str, overpass_timeout: int) -> str:
     escaped_query = query.replace('"', '\\"')
+    radius_m = int(radius_km * 1000)
     return f"""
-[out:json][timeout:60];
+[out:json][timeout:{overpass_timeout}];
 (
-  nwr["craft"="plumber"]({south},{west},{north},{east});
-  nwr["shop"="plumbing"]({south},{west},{north},{east});
-  nwr["name"~"{escaped_query}",i]({south},{west},{north},{east});
+  nwr(around:{radius_m},{lat},{lon})["craft"="plumber"];
+  nwr(around:{radius_m},{lat},{lon})["shop"="plumbing"];
+  nwr(around:{radius_m},{lat},{lon})["name"~"{escaped_query}",i];
 );
 out center tags;
 """.strip()
@@ -147,16 +148,22 @@ def dedupe_leads(leads: List[Dict[str, object]]) -> List[Dict[str, object]]:
     return deduped
 
 
-def find_businesses(city: str, query: str, limit: int) -> List[Dict[str, object]]:
-    south, west, north, east = get_city_bbox(city)
+def find_businesses(
+    city: str,
+    query: str,
+    limit: int,
+    radius_km: float,
+    overpass_timeout: int,
+) -> List[Dict[str, object]]:
+    lat, lon = get_city_center(city)
     time.sleep(REQUEST_DELAY_SECONDS)
 
-    overpass_query = build_overpass_query(south, west, north, east, query)
+    overpass_query = build_overpass_query(lat, lon, radius_km, query, overpass_timeout)
     response = requests.post(
         OVERPASS_URL,
         data=overpass_query,
         headers={"User-Agent": USER_AGENT},
-        timeout=90,
+        timeout=overpass_timeout + 30,
     )
     response.raise_for_status()
 
@@ -188,33 +195,50 @@ def build_graded_row(lead: Dict[str, object], graded: Dict[str, object]) -> Dict
 
 
 def write_graded_report(path: str, rows: List[Dict[str, object]]) -> None:
+    ordered_fieldnames = [
+        "business_name",
+        "phone",
+        "address",
+        "lat",
+        "lon",
+        "source",
+        "source_id",
+        "url",
+        "reachable",
+        "https",
+        "status_code",
+        "final_url",
+        "title",
+        "meta_description_present",
+        "has_phone",
+        "has_email",
+        "has_contact_page_link",
+        "contact_page_url",
+        "contact_page_reachable",
+        "notes",
+        "reasons",
+        "score_0_100",
+    ]
+
+    for row in rows:
+        row.setdefault("opportunity_score_0_100", 0)
+        row.setdefault("pitch", "")
+
     if not rows:
         fieldnames = [
-            "business_name",
-            "phone",
-            "address",
-            "lat",
-            "lon",
-            "source",
-            "source_id",
-            "url",
-            "reachable",
-            "https",
-            "status_code",
-            "final_url",
-            "title",
-            "meta_description_present",
-            "has_phone",
-            "has_email",
-            "has_contact_page_link",
-            "contact_page_url",
-            "contact_page_reachable",
-            "notes",
-            "reasons",
-            "score_0_100",
+            *ordered_fieldnames,
+            "opportunity_score_0_100",
+            "pitch",
         ]
     else:
-        fieldnames = list(rows[0].keys())
+        fieldnames = [
+            *ordered_fieldnames,
+            *[
+                field
+                for field in ("opportunity_score_0_100", "pitch")
+                if field not in ordered_fieldnames
+            ],
+        ]
 
     with open(path, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
@@ -291,13 +315,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--city", required=True, help="City name to search (e.g. 'Austin, TX').")
     parser.add_argument("--query", default="plumber", help="Business search term (default: plumber).")
     parser.add_argument("--limit", type=int, default=50, help="Maximum number of unique leads (default: 50).")
+    parser.add_argument(
+        "--radius_km",
+        type=float,
+        default=15,
+        help="Search radius around city center in kilometers (default: 15).",
+    )
+    parser.add_argument(
+        "--overpass_timeout",
+        type=int,
+        default=180,
+        help="Overpass query timeout in seconds (default: 180).",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
 
-    leads = find_businesses(city=args.city, query=args.query, limit=args.limit)
+    leads = find_businesses(
+        city=args.city,
+        query=args.query,
+        limit=args.limit,
+        radius_km=args.radius_km,
+        overpass_timeout=args.overpass_timeout,
+    )
     write_raw_leads(RAW_OUTPUT_FILE, leads)
 
     leads_with_websites = [lead for lead in leads if str(lead.get("website", "")).strip()]
@@ -310,13 +352,18 @@ def main() -> None:
         for lead, graded in zip(leads_with_websites, graded_rows)
     ]
     write_graded_report(GRADED_OUTPUT_FILE, report_rows)
-    priority_count = write_priority_leads(PRIORITY_LEADS_OUTPUT_FILE, report_rows)
+    priority_count = write_priority_leads(report_rows, PRIORITY_OUTPUT_FILE)
+
+    missing_phone_count = sum(1 for row in report_rows if not str(row.get("phone", "")).strip())
 
     print(f"Found {len(leads)} unique lead(s). Raw leads saved to {RAW_OUTPUT_FILE}.")
     print(
         f"Graded {len(report_rows)} lead(s) with websites. Report saved to {GRADED_OUTPUT_FILE}."
     )
-    print(f"Created priority_leads.csv with {priority_count} high-opportunity leads.")
+    print(f"Created {PRIORITY_OUTPUT_FILE} with {priority_count} prioritized leads.")
+    print(f"Total graded websites: {len(report_rows)}")
+    print(f"Included in {PRIORITY_OUTPUT_FILE}: {priority_count}")
+    print(f"Missing phone: {missing_phone_count}")
 
 
 if __name__ == "__main__":
