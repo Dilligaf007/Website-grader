@@ -264,11 +264,16 @@ def main() -> None:
     write_graded_report(GRADED_OUTPUT_FILE, report_rows)
     priority_count = write_priority_leads(report_rows, PRIORITY_OUTPUT_FILE)
 
+    missing_phone_count = sum(1 for row in report_rows if not str(row.get("phone", "")).strip())
+
     print(f"Found {len(leads)} unique lead(s). Raw leads saved to {RAW_OUTPUT_FILE}.")
     print(
         f"Graded {len(report_rows)} lead(s) with websites. Report saved to {GRADED_OUTPUT_FILE}."
     )
     print(f"Created {PRIORITY_OUTPUT_FILE} with {priority_count} prioritized leads.")
+    print(f"Total graded websites: {len(report_rows)}")
+    print(f"Included in {PRIORITY_OUTPUT_FILE}: {priority_count}")
+    print(f"Missing phone: {missing_phone_count}")
 
 
 if __name__ == "__main__":
