@@ -174,30 +174,37 @@ def build_reasons(row: Dict[str, object]) -> str:
 
 
 def calculate_opportunity_score(row: Dict[str, object]) -> int:
-    opportunity_score = 0
+    opportunity = 0
 
-    score_raw = row.get("score_0_100", 0)
-    try:
-        score_0_100 = int(score_raw) if score_raw is not None else 0
-    except (TypeError, ValueError):
-        score_0_100 = 0
+    score = row.get("score_0_100") or 0
+    has_email = bool(row.get("has_email"))
+    has_contact = bool(row.get("has_contact_page_link"))
+    has_meta = bool(row.get("meta_description_present"))
+    has_phone = bool(row.get("has_phone"))
 
-    if not row.get("has_email", False):
-        opportunity_score += 25
-    if not row.get("has_contact_page_link", False):
-        opportunity_score += 25
-    if not row.get("meta_description_present", False):
-        opportunity_score += 15
-    if not row.get("has_phone", False):
-        opportunity_score += 15
-    if score_0_100 < 70:
-        opportunity_score += 20
-    elif 70 <= score_0_100 <= 80:
-        opportunity_score += 10
-    if score_0_100 > 90:
-        opportunity_score -= 20
+    # Reward missing fundamentals
+    if not has_email:
+        opportunity += 25
+    if not has_contact:
+        opportunity += 25
+    if not has_meta:
+        opportunity += 15
+    if not has_phone:
+        opportunity += 15
 
-    return max(0, min(100, int(opportunity_score)))
+    # Reward weak overall site
+    if score < 60:
+        opportunity += 25
+    elif score < 75:
+        opportunity += 15
+    elif score < 85:
+        opportunity += 5
+
+    # Penalize very strong sites
+    if score > 90:
+        opportunity -= 20
+
+    return max(0, min(100, opportunity))
 
 
 def build_pitch(row: Dict[str, object]) -> str:
