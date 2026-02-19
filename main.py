@@ -176,7 +176,11 @@ def build_reasons(row: Dict[str, object]) -> str:
 def calculate_opportunity_score(row: Dict[str, object]) -> int:
     opportunity = 0
 
-    score = row.get("score_0_100") or 0
+    raw_score = row.get("score_0_100", 0)
+    try:
+        score = float(raw_score)
+    except (TypeError, ValueError):
+        score = 0
     has_email = bool(row.get("has_email"))
     has_contact = bool(row.get("has_contact_page_link"))
     has_meta = bool(row.get("meta_description_present"))
