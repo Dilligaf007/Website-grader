@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 
 INPUT_FILE = "websites.txt"
 OUTPUT_FILE = "report.csv"
+PRIORITY_OUTPUT_FILE = "priority_leads.csv"
 TIMEOUT_SECONDS = 10
 MAX_WORKERS = 8
 USER_AGENT = "WebsiteGrader/1.0"
@@ -30,6 +31,17 @@ PHONE_PATTERN = re.compile(
 EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 DATE_LIKE_PATTERN = re.compile(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b")
 ZIP_PATTERN = re.compile(r"\b\d{5}(?:-\d{4})?\b")
+
+PRIORITY_FIELDNAMES = [
+    "business_name",
+    "phone",
+    "address",
+    "url",
+    "opportunity_score_0_100",
+    "score_0_100",
+    "reasons",
+    "pitch",
+]
 
 
 def normalize_url(url: str) -> str:
@@ -270,6 +282,61 @@ def write_report(rows: List[Dict[str, object]], output_path: str) -> None:
         writer.writerows(rows)
 
 
+def as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return bool(value)
+
+
+def as_float(value: object) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def write_priority_leads(rows: List[Dict[str, object]], output_path: str) -> int:
+    has_phone_column = any("has_phone" in row for row in rows)
+
+    actionable_rows: List[Dict[str, object]] = []
+    for row in rows:
+        if not as_bool(row.get("reachable", False)):
+            continue
+        if not str(row.get("url", "")).strip():
+            continue
+
+        opportunity_score = as_float(row.get("opportunity_score_0_100"))
+        if opportunity_score is None or opportunity_score <= 0:
+            continue
+
+        if has_phone_column and not as_bool(row.get("has_phone", False)):
+            continue
+
+        actionable_rows.append(row)
+
+    sorted_rows = sorted(
+        actionable_rows,
+        key=lambda row: as_float(row.get("opportunity_score_0_100")) or 0.0,
+        reverse=True,
+    )
+
+    priority_rows = [
+        {field: row.get(field, "") for field in PRIORITY_FIELDNAMES}
+        for row in sorted_rows
+    ]
+
+    with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=PRIORITY_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(priority_rows)
+
+    return len(priority_rows)
+
+
 def main() -> None:
     websites = load_websites(INPUT_FILE)
 
@@ -278,7 +345,9 @@ def main() -> None:
         rows = list(executor.map(grade_website, websites))
 
     write_report(rows, OUTPUT_FILE)
+    priority_count = write_priority_leads(rows, PRIORITY_OUTPUT_FILE)
     print(f"Graded {len(rows)} website(s). Report saved to {OUTPUT_FILE}.")
+    print(f"Created {PRIORITY_OUTPUT_FILE} with {priority_count} prioritized leads.")
 
 
 if __name__ == "__main__":

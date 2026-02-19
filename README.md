@@ -33,7 +33,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-After running, `report.csv` will be created in the project directory.
+After running, `report.csv` and `priority_leads.csv` will be created in the project directory. Use `priority_leads.csv` for first-pass outreach.
 
 ## Run: find and grade plumbers from OpenStreetMap
 
@@ -58,6 +58,7 @@ Outputs:
 - `report.csv`: website grading report for leads that have websites, with leading source columns:
   - `business_name`, `phone`, `address`, `lat`, `lon`, `source`, `source_id`
   - followed by grading columns (`url`, `reachable`, `https`, `status_code`, etc.)
+- `priority_leads.csv`: outreach-ready subset of actionable leads, filtered and sorted by `opportunity_score_0_100` (highest first). Start calling from this file first when planning outreach.
 
 The OSM pipeline applies basic deduping by:
 
