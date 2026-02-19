@@ -1,5 +1,6 @@
 import csv
 import re
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 from urllib.parse import urljoin, urlparse
@@ -42,59 +43,6 @@ PRIORITY_FIELDNAMES = [
     "reasons",
     "pitch",
 ]
-
-
-def calculate_opportunity_score(row: Dict[str, object]) -> int:
-    """Estimate outreach opportunity from website gaps (0-100)."""
-    if not row.get("reachable"):
-        return 0
-
-    opportunity = 0
-    if not row.get("https"):
-        opportunity += 15
-
-    status_code = row.get("status_code")
-    if not (isinstance(status_code, int) and 200 <= status_code < 400):
-        opportunity += 10
-
-    if not row.get("title"):
-        opportunity += 20
-    if not row.get("meta_description_present"):
-        opportunity += 15
-    if not row.get("has_phone"):
-        opportunity += 15
-    if not row.get("has_email"):
-        opportunity += 10
-    if not row.get("has_contact_page_link"):
-        opportunity += 15
-
-    return min(100, opportunity)
-
-
-def build_pitch(row: Dict[str, object]) -> str:
-    """Create a concise outreach pitch based on detected website gaps."""
-    if not row.get("reachable"):
-        return ""
-
-    improvements: List[str] = []
-    if not row.get("https"):
-        improvements.append("secure HTTPS setup")
-    if not row.get("title"):
-        improvements.append("clear page titles")
-    if not row.get("meta_description_present"):
-        improvements.append("stronger search snippets")
-    if not row.get("has_phone"):
-        improvements.append("prominent click-to-call")
-    if not row.get("has_email"):
-        improvements.append("better lead capture")
-    if not row.get("has_contact_page_link"):
-        improvements.append("an easy-to-find contact page")
-
-    if not improvements:
-        return "Website looks strong overall; we can help improve conversion rate and local SEO performance."
-
-    top_improvements = ", ".join(improvements[:3])
-    return f"We can quickly improve {top_improvements} to help generate more qualified leads."
 
 
 def normalize_url(url: str) -> str:
@@ -225,14 +173,22 @@ def build_reasons(row: Dict[str, object]) -> str:
     return "; ".join(reasons)
 
 
-def calculate_opportunity_score(score_0_100: int, reasons: str, reachable: bool) -> int:
+def calculate_opportunity_score(row: Dict[str, object]) -> int:
     """Estimate sales opportunity from technical score and gaps.
 
     Lower quality websites indicate higher opportunity, but unreachable sites are excluded.
     """
+    reachable = bool(row.get("reachable", False))
     if not reachable:
         return 0
 
+    score_raw = row.get("score_0_100", 0)
+    try:
+        score_0_100 = int(score_raw) if score_raw is not None else 0
+    except (TypeError, ValueError):
+        score_0_100 = 0
+
+    reasons = str(row.get("reasons", "") or "")
     reason_set = {reason.strip() for reason in reasons.split(";") if reason.strip()}
     opportunity_score = max(0, 100 - score_0_100)
 
@@ -359,17 +315,19 @@ def grade_website(url: str) -> Dict[str, object]:
     except Exception as exc:
         result["notes"] = f"Unexpected error: {exc}"
 
+    result["reasons"] = build_reasons(result)
     result["score_0_100"] = calculate_score(result)
     result["opportunity_score_0_100"] = calculate_opportunity_score(result)
     result["pitch"] = build_pitch(result)
-    result["reasons"] = build_reasons(result)
-    result["opportunity_score_0_100"] = calculate_opportunity_score(
-        int(result["score_0_100"]),
-        str(result["reasons"]),
-        bool(result["reachable"]),
-    )
-    result["pitch"] = build_pitch(result)
     return result
+
+
+def run_self_test() -> None:
+    sample = grade_website("https://example.com")
+    assert "opportunity_score_0_100" in sample
+    assert isinstance(sample["opportunity_score_0_100"], int)
+    assert 0 <= sample["opportunity_score_0_100"] <= 100
+    assert "pitch" in sample
 
 
 def load_websites(path: str) -> List[str]:
@@ -478,4 +436,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        run_self_test()
+        print("Self-test passed.")
+        sys.exit(0)
     main()
