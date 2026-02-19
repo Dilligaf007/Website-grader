@@ -26,7 +26,7 @@ PRIORITY_LEADS_OUTPUT_FILE = "priority_leads.csv"
 
 WEBSITE_KEYS = ["website", "contact:website", "url"]
 PHONE_KEYS = ["phone", "contact:phone"]
-DEFAULT_TERMS = ["plumber", "plumbing", "drain", "sewer", "water heater", "pipe", "rooter"]
+DEFAULT_TERMS = ["plumber", "plumbing", "drain", "sewer", "rooter", "pipe", "water heater"]
 
 
 def clean_whitespace(value: str) -> str:
@@ -77,6 +77,9 @@ def build_overpass_query(lat: float, lon: float, radius_km: float, terms: List[s
   nwr(around:{radius_m},{lat},{lon})["craft"="plumber"];
   nwr(around:{radius_m},{lat},{lon})["shop"="plumbing"];
   nwr(around:{radius_m},{lat},{lon})["name"~"{name_regex}",i];
+  nwr(around:{radius_m},{lat},{lon})["description"~"{name_regex}",i];
+  nwr(around:{radius_m},{lat},{lon})["brand"~"{name_regex}",i];
+  nwr(around:{radius_m},{lat},{lon})["operator"~"{name_regex}",i];
 );
 out center tags;
 """.strip()
@@ -192,6 +195,19 @@ def dedupe_leads(leads: List[Dict[str, object]]) -> List[Dict[str, object]]:
     return deduped
 
 
+def sort_leads(leads: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    return sorted(
+        leads,
+        key=lambda lead: (
+            str(lead.get("name", "")).strip().lower(),
+            str(lead.get("address", "")).strip().lower(),
+            str(lead.get("website", "")).strip().lower(),
+            str(lead.get("osm_type", "")).strip().lower(),
+            str(lead.get("osm_id", "")).strip(),
+        ),
+    )
+
+
 def find_businesses(
     city: str,
     terms: List[str],
@@ -206,7 +222,8 @@ def find_businesses(
     elements = fetch_overpass_elements(overpass_query, overpass_timeout)
     leads = [parse_element(element) for element in elements]
     deduped = dedupe_leads(leads)
-    return deduped[:limit]
+    ordered = sort_leads(deduped)
+    return ordered[:limit]
 
 
 def parse_terms(terms_arg: str) -> List[str]:
@@ -385,15 +402,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--radius_km",
         type=float,
-        default=20,
-        help="Search radius around city center in kilometers (default: 20).",
+        default=25,
+        help="Search radius around city center in kilometers (default: 25).",
     )
     parser.add_argument(
         "--terms",
         default=",".join(DEFAULT_TERMS),
         help=(
             "Comma-separated terms for case-insensitive business name matching "
-            "(default: plumber,plumbing,drain,sewer,water heater,pipe,rooter)."
+            "(default: plumber,plumbing,drain,sewer,rooter,pipe,water heater)."
         ),
     )
     parser.add_argument(

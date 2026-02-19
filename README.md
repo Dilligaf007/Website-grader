@@ -44,14 +44,15 @@ python find_and_grade.py --city "Austin, TX"
 Optional arguments:
 
 - `--limit` (default: `50`)
-- `--radius_km` (default: `20`)
-- `--terms` (default: `plumber,plumbing,drain,sewer,water heater,pipe,rooter`)
+- `--radius_km` (default: `25`)
+- `--terms` (default: `plumber,plumbing,drain,sewer,rooter,pipe,water heater`)
 - `--overpass_timeout` (default: `180`)
 
 Example with custom radius and terms:
 
 ```bash
-python find_and_grade.py --city "Austin, TX" --limit 100 --radius_km 25 --terms "plumbing,drain,sewer"
+python find_and_grade.py --city "Austin, TX" --limit 100 --radius_km 30
+python find_and_grade.py --city "Austin, TX" --limit 100 --radius_km 30 --terms "plumbing,drain,sewer"
 ```
 
 For larger lead counts (for example `--limit 200`), tune `--radius_km` to keep Overpass queries focused and reduce timeout risk.
@@ -59,7 +60,7 @@ For larger lead counts (for example `--limit 200`), tune `--radius_km` to keep O
 Example (200 leads):
 
 ```bash
-python find_and_grade.py --city "Austin, TX" --limit 200 --radius_km 20
+python find_and_grade.py --city "Austin, TX" --limit 200 --radius_km 25
 ```
 
 Outputs:
