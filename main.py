@@ -174,13 +174,7 @@ def build_reasons(row: Dict[str, object]) -> str:
 
 
 def calculate_opportunity_score(row: Dict[str, object]) -> int:
-    """Estimate sales opportunity from technical score and gaps.
-
-    Lower quality websites indicate higher opportunity, but unreachable sites are excluded.
-    """
-    reachable = bool(row.get("reachable", False))
-    if not reachable:
-        return 0
+    opportunity_score = 100
 
     score_raw = row.get("score_0_100", 0)
     try:
@@ -188,46 +182,32 @@ def calculate_opportunity_score(row: Dict[str, object]) -> int:
     except (TypeError, ValueError):
         score_0_100 = 0
 
-    reasons = str(row.get("reasons", "") or "")
-    reason_set = {reason.strip() for reason in reasons.split(";") if reason.strip()}
-    opportunity_score = max(0, 100 - score_0_100)
-
-    # Emphasize lead-gen gaps that are easier to fix and good outreach hooks.
-    if "missing_contact_page_link" in reason_set:
-        opportunity_score += 10
-    if "missing_phone" in reason_set:
-        opportunity_score += 8
-    if "missing_email" in reason_set:
-        opportunity_score += 8
-    if "missing_meta_description" in reason_set:
-        opportunity_score += 5
-    if "missing_title" in reason_set:
-        opportunity_score += 4
-    if "missing_https" in reason_set:
-        opportunity_score += 5
-    if "bad_status_code" in reason_set:
-        opportunity_score += 7
-    if "contact_page_unreachable" in reason_set:
-        opportunity_score += 5
+    if not row.get("has_email", False):
+        opportunity_score -= 20
+    if not row.get("has_contact_page_link", False):
+        opportunity_score -= 15
+    if not row.get("meta_description_present", False):
+        opportunity_score -= 10
+    if score_0_100 > 90:
+        opportunity_score -= 15
 
     return max(0, min(100, int(opportunity_score)))
 
 
 def build_pitch(row: Dict[str, object]) -> str:
-    if not row["reachable"]:
-        return ""
-
     gaps: List[str] = []
     if not row["has_contact_page_link"]:
         gaps.append("a clear contact page")
-    if not row["has_phone"]:
-        gaps.append("a visible phone number")
     if not row["has_email"]:
         gaps.append("a visible email address")
     if not row["meta_description_present"]:
         gaps.append("an SEO-ready meta description")
-    if not row["https"]:
-        gaps.append("HTTPS security")
+
+    if not row["reachable"]:
+        return (
+            "I couldn't access your website during a quick review. "
+            "I can help diagnose uptime/performance issues and improve lead capture once it's reachable."
+        )
 
     if not gaps:
         return "Your site is in strong shape overall—small conversion-focused tweaks could still increase lead volume."
@@ -237,10 +217,7 @@ def build_pitch(row: Dict[str, object]) -> str:
     else:
         gap_text = ", ".join(gaps[:-1]) + f", and {gaps[-1]}"
 
-    return (
-        f"I noticed your website is missing {gap_text}, which can reduce trust and inbound leads. "
-        "We can fix these quickly to help turn more visitors into booked jobs."
-    )
+    return f"I noticed your website is missing {gap_text}; we can fix that quickly to improve inbound leads."
 
 
 def grade_website(url: str) -> Dict[str, object]:
