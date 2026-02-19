@@ -16,6 +16,7 @@ NOMINATIM_EMAIL = "nathan.strickland.consult@gmail.com"
 REQUEST_DELAY_SECONDS = 1.0
 RAW_OUTPUT_FILE = "leads_raw.csv"
 GRADED_OUTPUT_FILE = "report.csv"
+PRIORITY_LEADS_OUTPUT_FILE = "priority_leads.csv"
 
 WEBSITE_KEYS = ["website", "contact:website", "url"]
 PHONE_KEYS = ["phone", "contact:phone"]
@@ -243,6 +244,70 @@ def write_graded_report(path: str, rows: List[Dict[str, object]]) -> None:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def is_true(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return False
+
+
+def as_float(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def build_priority_row(row: Dict[str, object]) -> Dict[str, object]:
+    return {
+        "business_name": row.get("business_name", ""),
+        "phone": row.get("phone", ""),
+        "url": row.get("url", ""),
+        "opportunity_score_0_100": row.get("opportunity_score_0_100", ""),
+        "score_0_100": row.get("score_0_100", ""),
+        "reasons": row.get("reasons", ""),
+        "pitch": row.get("pitch", ""),
+    }
+
+
+def write_priority_leads(path: str, rows: List[Dict[str, object]]) -> int:
+    filtered_rows = [
+        row
+        for row in rows
+        if is_true(row.get("reachable"))
+        and is_true(row.get("has_phone"))
+        and str(row.get("url", "")).strip()
+        and as_float(row.get("opportunity_score_0_100", 0)) > 0
+    ]
+    sorted_rows = sorted(
+        filtered_rows,
+        key=lambda row: as_float(row.get("opportunity_score_0_100", 0)),
+        reverse=True,
+    )
+
+    fieldnames = [
+        "business_name",
+        "phone",
+        "url",
+        "opportunity_score_0_100",
+        "score_0_100",
+        "reasons",
+        "pitch",
+    ]
+
+    with open(path, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(build_priority_row(row) for row in sorted_rows)
+
+    return len(sorted_rows)
 
 
 def parse_args() -> argparse.Namespace:
