@@ -211,6 +211,8 @@ def write_graded_report(path: str, rows: List[Dict[str, object]]) -> None:
             "notes",
             "reasons",
             "score_0_100",
+            "opportunity_score_0_100",
+            "pitch",
         ]
     else:
         fieldnames = list(rows[0].keys())

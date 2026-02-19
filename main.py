@@ -44,6 +44,59 @@ PRIORITY_FIELDNAMES = [
 ]
 
 
+def calculate_opportunity_score(row: Dict[str, object]) -> int:
+    """Estimate outreach opportunity from website gaps (0-100)."""
+    if not row.get("reachable"):
+        return 0
+
+    opportunity = 0
+    if not row.get("https"):
+        opportunity += 15
+
+    status_code = row.get("status_code")
+    if not (isinstance(status_code, int) and 200 <= status_code < 400):
+        opportunity += 10
+
+    if not row.get("title"):
+        opportunity += 20
+    if not row.get("meta_description_present"):
+        opportunity += 15
+    if not row.get("has_phone"):
+        opportunity += 15
+    if not row.get("has_email"):
+        opportunity += 10
+    if not row.get("has_contact_page_link"):
+        opportunity += 15
+
+    return min(100, opportunity)
+
+
+def build_pitch(row: Dict[str, object]) -> str:
+    """Create a concise outreach pitch based on detected website gaps."""
+    if not row.get("reachable"):
+        return ""
+
+    improvements: List[str] = []
+    if not row.get("https"):
+        improvements.append("secure HTTPS setup")
+    if not row.get("title"):
+        improvements.append("clear page titles")
+    if not row.get("meta_description_present"):
+        improvements.append("stronger search snippets")
+    if not row.get("has_phone"):
+        improvements.append("prominent click-to-call")
+    if not row.get("has_email"):
+        improvements.append("better lead capture")
+    if not row.get("has_contact_page_link"):
+        improvements.append("an easy-to-find contact page")
+
+    if not improvements:
+        return "Website looks strong overall; we can help improve conversion rate and local SEO performance."
+
+    top_improvements = ", ".join(improvements[:3])
+    return f"We can quickly improve {top_improvements} to help generate more qualified leads."
+
+
 def normalize_url(url: str) -> str:
     """Ensure URL has a scheme; default to https."""
     trimmed = url.strip()
@@ -190,6 +243,8 @@ def grade_website(url: str) -> Dict[str, object]:
         "notes": "",
         "reasons": "",
         "score_0_100": 0,
+        "opportunity_score_0_100": 0,
+        "pitch": "",
     }
 
     if not normalized_url:
@@ -243,6 +298,8 @@ def grade_website(url: str) -> Dict[str, object]:
         result["notes"] = f"Unexpected error: {exc}"
 
     result["score_0_100"] = calculate_score(result)
+    result["opportunity_score_0_100"] = calculate_opportunity_score(result)
+    result["pitch"] = build_pitch(result)
     result["reasons"] = build_reasons(result)
     return result
 
@@ -274,6 +331,8 @@ def write_report(rows: List[Dict[str, object]], output_path: str) -> None:
         "notes",
         "reasons",
         "score_0_100",
+        "opportunity_score_0_100",
+        "pitch",
     ]
 
     with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
