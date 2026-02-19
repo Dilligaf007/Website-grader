@@ -12,6 +12,7 @@ from main import MAX_WORKERS, grade_website
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 USER_AGENT = "WebsiteGrader-FindAndGrade/1.0 (contact: support@example.com)"
+NOMINATIM_EMAIL = "support@example.com"
 REQUEST_DELAY_SECONDS = 1.0
 RAW_OUTPUT_FILE = "leads_raw.csv"
 GRADED_OUTPUT_FILE = "report.csv"
@@ -25,12 +26,19 @@ def clean_whitespace(value: str) -> str:
 
 
 def get_city_bbox(city: str) -> Tuple[float, float, float, float]:
+    time.sleep(1)
+    params = {"q": city, "format": "json", "limit": 1, "email": NOMINATIM_EMAIL}
+    headers = {"User-Agent": USER_AGENT, "Accept-Language": "en"}
     response = requests.get(
         NOMINATIM_URL,
-        params={"q": city, "format": "json", "limit": 1},
-        headers={"User-Agent": USER_AGENT},
+        params=params,
+        headers=headers,
         timeout=20,
     )
+    if response.status_code == 403:
+        request_url = requests.Request("GET", NOMINATIM_URL, params=params).prepare().url
+        print("Nominatim 403: check USER_AGENT and email param")
+        print(f"Requested URL: {request_url}")
     response.raise_for_status()
 
     payload = response.json()
