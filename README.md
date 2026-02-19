@@ -1,11 +1,12 @@
 # Website Grader
 
-A Python 3.11 script that grades a list of business websites and exports a CSV report.
+A Python 3.11 script set for grading business websites and exporting CSV reports.
 
 ## Features
 
-- Reads URLs from `websites.txt` (one URL per line)
-- Fetches each homepage with `requests` (timeout + redirect support)
+- Grades a predefined list of URLs from `websites.txt`
+- Finds local businesses from OpenStreetMap (Overpass) and grades discovered websites
+- Uses Nominatim geocoding to convert a city name into a search bounding box
 - Parses HTML with `beautifulsoup4`
 - If a contact page link is found on the homepage, fetches that contact page too
 - Uses homepage + contact page content together for lead signals:
@@ -13,7 +14,6 @@ A Python 3.11 script that grades a list of business websites and exports a CSV r
   - email presence
   - contact signal detection
 - Produces deterministic output with concurrent grading via `ThreadPoolExecutor(max_workers=8)`
-- Produces `report.csv` with scores from 0 to 100 and a `reasons` column for missing items
 
 ## Requirements
 
@@ -27,7 +27,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Run
+## Run: grade a static website list
 
 ```bash
 python main.py
@@ -35,7 +35,36 @@ python main.py
 
 After running, `report.csv` will be created in the project directory.
 
-## Input format
+## Run: find and grade plumbers from OpenStreetMap
+
+```bash
+python find_and_grade.py --city "Austin, TX"
+```
+
+Optional arguments:
+
+- `--query` (default: `plumber`)
+- `--limit` (default: `50`)
+
+Example with custom query and limit:
+
+```bash
+python find_and_grade.py --city "Seattle, WA" --query "plumber" --limit 25
+```
+
+Outputs:
+
+- `leads_raw.csv`: raw OSM lead fields (`name`, `website`, `phone`, `address`, `lat`, `lon`, `osm_type`, `osm_id`)
+- `report.csv`: website grading report for leads that have websites, with leading source columns:
+  - `business_name`, `phone`, `address`, `lat`, `lon`, `source`, `source_id`
+  - followed by grading columns (`url`, `reachable`, `https`, `status_code`, etc.)
+
+The OSM pipeline applies basic deduping by:
+
+- same website URL, or
+- same business name + address.
+
+## Input format for `main.py`
 
 Edit `websites.txt` to include one URL per line:
 
@@ -45,26 +74,6 @@ https://your-business-site.com
 ```
 
 Blank lines and comment lines starting with `#` are ignored.
-
-## Output columns
-
-`report.csv` contains:
-
-- `url`
-- `reachable`
-- `https`
-- `status_code`
-- `final_url`
-- `title`
-- `meta_description_present`
-- `has_phone`
-- `has_email`
-- `has_contact_page_link`
-- `contact_page_url`
-- `contact_page_reachable`
-- `notes`
-- `reasons` (semicolon-separated missing items, such as `missing_meta_description; missing_email`)
-- `score_0_100`
 
 ## Scoring rubric (0-100)
 
