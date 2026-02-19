@@ -10,16 +10,23 @@ import requests
 from main import MAX_WORKERS, PRIORITY_OUTPUT_FILE, grade_website, write_priority_leads
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.ru/api/interpreter",
+]
 USER_AGENT = "WebsiteGrader-FindAndGrade/1.0 (contact: nathan.strickland.consult@gmail.com)"
 NOMINATIM_EMAIL = "nathan.strickland.consult@gmail.com"
 REQUEST_DELAY_SECONDS = 1.0
+OVERPASS_MAX_RETRIES = 3
+OVERPASS_BACKOFF_SECONDS = 2.0
 RAW_OUTPUT_FILE = "leads_raw.csv"
 GRADED_OUTPUT_FILE = "report.csv"
 PRIORITY_LEADS_OUTPUT_FILE = "priority_leads.csv"
 
 WEBSITE_KEYS = ["website", "contact:website", "url"]
 PHONE_KEYS = ["phone", "contact:phone"]
+DEFAULT_TERMS = ["plumber", "plumbing", "drain", "sewer", "water heater", "pipe", "rooter"]
 
 
 def clean_whitespace(value: str) -> str:
@@ -54,18 +61,55 @@ def get_city_center(city: str) -> Tuple[float, float]:
     return float(lat), float(lon)
 
 
-def build_overpass_query(lat: float, lon: float, radius_km: float, query: str, overpass_timeout: int) -> str:
-    escaped_query = query.replace('"', '\\"')
+def build_name_regex(terms: List[str]) -> str:
+    escaped_terms = [re.escape(term.strip()) for term in terms if term.strip()]
+    if not escaped_terms:
+        escaped_terms = [re.escape(term) for term in DEFAULT_TERMS]
+    return "|".join(escaped_terms)
+
+
+def build_overpass_query(lat: float, lon: float, radius_km: float, terms: List[str], overpass_timeout: int) -> str:
+    name_regex = build_name_regex(terms).replace('"', '\\"')
     radius_m = int(radius_km * 1000)
     return f"""
 [out:json][timeout:{overpass_timeout}];
 (
   nwr(around:{radius_m},{lat},{lon})["craft"="plumber"];
   nwr(around:{radius_m},{lat},{lon})["shop"="plumbing"];
-  nwr(around:{radius_m},{lat},{lon})["name"~"{escaped_query}",i];
+  nwr(around:{radius_m},{lat},{lon})["name"~"{name_regex}",i];
 );
 out center tags;
 """.strip()
+
+
+def fetch_overpass_elements(overpass_query: str, overpass_timeout: int) -> List[Dict[str, object]]:
+    last_exception: Optional[Exception] = None
+    for endpoint in OVERPASS_ENDPOINTS:
+        for attempt in range(1, OVERPASS_MAX_RETRIES + 1):
+            try:
+                response = requests.post(
+                    endpoint,
+                    data=overpass_query,
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=overpass_timeout + 30,
+                )
+                response.raise_for_status()
+                return response.json().get("elements", [])
+            except (requests.RequestException, ValueError) as exc:
+                last_exception = exc
+                if attempt < OVERPASS_MAX_RETRIES:
+                    backoff_seconds = OVERPASS_BACKOFF_SECONDS * (2 ** (attempt - 1))
+                    print(
+                        f"Overpass request failed at {endpoint} (attempt {attempt}/{OVERPASS_MAX_RETRIES}). "
+                        f"Retrying in {backoff_seconds:.1f}s..."
+                    )
+                    time.sleep(backoff_seconds)
+                else:
+                    print(f"Overpass endpoint exhausted: {endpoint}")
+
+    if last_exception is not None:
+        raise RuntimeError("All Overpass endpoints failed after retries.") from last_exception
+    raise RuntimeError("All Overpass endpoints failed without a specific exception.")
 
 
 def first_tag(tags: Dict[str, str], keys: List[str]) -> str:
@@ -150,7 +194,7 @@ def dedupe_leads(leads: List[Dict[str, object]]) -> List[Dict[str, object]]:
 
 def find_businesses(
     city: str,
-    query: str,
+    terms: List[str],
     limit: int,
     radius_km: float,
     overpass_timeout: int,
@@ -158,19 +202,16 @@ def find_businesses(
     lat, lon = get_city_center(city)
     time.sleep(REQUEST_DELAY_SECONDS)
 
-    overpass_query = build_overpass_query(lat, lon, radius_km, query, overpass_timeout)
-    response = requests.post(
-        OVERPASS_URL,
-        data=overpass_query,
-        headers={"User-Agent": USER_AGENT},
-        timeout=overpass_timeout + 30,
-    )
-    response.raise_for_status()
-
-    elements = response.json().get("elements", [])
+    overpass_query = build_overpass_query(lat, lon, radius_km, terms, overpass_timeout)
+    elements = fetch_overpass_elements(overpass_query, overpass_timeout)
     leads = [parse_element(element) for element in elements]
     deduped = dedupe_leads(leads)
     return deduped[:limit]
+
+
+def parse_terms(terms_arg: str) -> List[str]:
+    parsed = [term.strip() for term in terms_arg.split(",") if term.strip()]
+    return parsed or DEFAULT_TERMS.copy()
 
 
 def write_raw_leads(path: str, leads: List[Dict[str, object]]) -> None:
@@ -340,13 +381,20 @@ def write_priority_leads(path: str, rows: List[Dict[str, object]]) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Find and grade local businesses from OpenStreetMap.")
     parser.add_argument("--city", required=True, help="City name to search (e.g. 'Austin, TX').")
-    parser.add_argument("--query", default="plumber", help="Business search term (default: plumber).")
     parser.add_argument("--limit", type=int, default=50, help="Maximum number of unique leads (default: 50).")
     parser.add_argument(
         "--radius_km",
         type=float,
-        default=15,
-        help="Search radius around city center in kilometers (default: 15).",
+        default=20,
+        help="Search radius around city center in kilometers (default: 20).",
+    )
+    parser.add_argument(
+        "--terms",
+        default=",".join(DEFAULT_TERMS),
+        help=(
+            "Comma-separated terms for case-insensitive business name matching "
+            "(default: plumber,plumbing,drain,sewer,water heater,pipe,rooter)."
+        ),
     )
     parser.add_argument(
         "--overpass_timeout",
@@ -359,10 +407,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    terms = parse_terms(args.terms)
 
     leads = find_businesses(
         city=args.city,
-        query=args.query,
+        terms=terms,
         limit=args.limit,
         radius_km=args.radius_km,
         overpass_timeout=args.overpass_timeout,
