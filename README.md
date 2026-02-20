@@ -98,3 +98,13 @@ Blank lines and comment lines starting with `#` are ignored.
 - Phone detected (homepage/contact page): +10
 - Email detected (homepage/contact page): +10
 - Contact page link detected: +15
+
+## Generate outreach email copy in Excel
+
+If you already have `outreach_sheet.xlsx` with prioritized leads, you can append personalized outreach copy columns:
+
+```bash
+python enhance_outreach_sheet.py
+```
+
+This adds/updates `email_subject` and `email_body` columns, applies tier-based templates from `opportunity_score_0_100`, preserves existing columns, and freezes the header row.
