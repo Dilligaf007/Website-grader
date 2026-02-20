@@ -21,6 +21,8 @@ A Python 3.11 script set for grading business websites and exporting CSV reports
 
 ## Setup
 
+Install project dependencies before running the pipelines (including XLSX export via `openpyxl`):
+
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
