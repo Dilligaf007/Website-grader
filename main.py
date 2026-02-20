@@ -36,6 +36,8 @@ ZIP_PATTERN = re.compile(r"\b\d{5}(?:-\d{4})?\b")
 PRIORITY_FIELDNAMES = [
     "business_name",
     "phone",
+    "primary_email",
+    "emails",
     "address",
     "url",
     "opportunity_score_0_100",
@@ -83,6 +85,19 @@ def has_valid_us_phone(text_content: str) -> bool:
     return False
 
 
+def extract_emails(text: str) -> List[str]:
+    seen: set[str] = set()
+    emails: List[str] = []
+    for match in EMAIL_PATTERN.finditer(text):
+        email = match.group(0)
+        normalized = email.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        emails.append(email)
+    return emails
+
+
 def parse_html(html: str, base_url: str) -> Dict[str, object]:
     soup = BeautifulSoup(html, "html.parser")
 
@@ -96,7 +111,8 @@ def parse_html(html: str, base_url: str) -> Dict[str, object]:
 
     text_content = soup.get_text(" ", strip=True)
     has_phone = has_valid_us_phone(text_content)
-    has_email = bool(EMAIL_PATTERN.search(text_content))
+    emails = extract_emails(text_content)
+    has_email = bool(emails)
 
     contact_page_url: Optional[str] = None
     has_contact_page_link = False
@@ -116,9 +132,23 @@ def parse_html(html: str, base_url: str) -> Dict[str, object]:
         "meta_description_present": meta_description_present,
         "has_phone": has_phone,
         "has_email": has_email,
+        "emails": emails,
         "has_contact_page_link": has_contact_page_link,
         "contact_page_url": contact_page_url or "",
     }
+
+
+def merge_emails(*email_lists: List[str]) -> List[str]:
+    seen: set[str] = set()
+    merged: List[str] = []
+    for email_list in email_lists:
+        for email in email_list:
+            normalized = email.lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            merged.append(email)
+    return merged
 
 
 def calculate_score(row: Dict[str, object]) -> int:
@@ -249,6 +279,8 @@ def grade_website(url: str) -> Dict[str, object]:
         "meta_description_present": False,
         "has_phone": False,
         "has_email": False,
+        "emails": "",
+        "primary_email": "",
         "has_contact_page_link": False,
         "contact_page_url": "",
         "contact_page_reachable": False,
@@ -277,6 +309,7 @@ def grade_website(url: str) -> Dict[str, object]:
         else:
             homepage_data = parse_html(response.text, response.url)
             result.update(homepage_data)
+            combined_emails = merge_emails(homepage_data.get("emails", []))
 
             contact_page_url = result["contact_page_url"]
             if contact_page_url:
@@ -288,7 +321,11 @@ def grade_website(url: str) -> Dict[str, object]:
                     if "text/html" in contact_content_type:
                         contact_data = parse_html(contact_response.text, contact_response.url)
                         result["has_phone"] = bool(result["has_phone"] or contact_data["has_phone"])
-                        result["has_email"] = bool(result["has_email"] or contact_data["has_email"])
+                        combined_emails = merge_emails(
+                            combined_emails,
+                            contact_data.get("emails", []),
+                        )
+                        result["has_email"] = bool(combined_emails)
                         result["has_contact_page_link"] = bool(
                             result["has_contact_page_link"] or contact_data["has_contact_page_link"]
                         )
@@ -301,6 +338,10 @@ def grade_website(url: str) -> Dict[str, object]:
                 except requests.exceptions.RequestException as exc:
                     note = f"Contact page request failed: {exc}"
                     result["notes"] = f"{result['notes']}; {note}".strip("; ")
+
+            result["emails"] = "; ".join(combined_emails)
+            result["primary_email"] = combined_emails[0] if combined_emails else ""
+            result["has_email"] = bool(combined_emails)
 
     except requests.exceptions.Timeout:
         result["notes"] = f"Request timed out after {TIMEOUT_SECONDS}s"
@@ -345,6 +386,8 @@ def write_report(rows: List[Dict[str, object]], output_path: str) -> None:
         "meta_description_present",
         "has_phone",
         "has_email",
+        "primary_email",
+        "emails",
         "has_contact_page_link",
         "contact_page_url",
         "contact_page_reachable",
