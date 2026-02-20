@@ -38,6 +38,11 @@ PRIORITY_FIELDNAMES = [
     "phone",
     "primary_email",
     "emails",
+    "has_contact_form",
+    "contact_form_url",
+    "outreach_channel",
+    "form_message",
+    "call_script",
     "address",
     "url",
     "opportunity_score_0_100",
@@ -45,6 +50,8 @@ PRIORITY_FIELDNAMES = [
     "reasons",
     "pitch",
 ]
+
+CONTACT_LINK_HINTS = ["contact", "get-in-touch", "request-service", "schedule", "estimate"]
 
 
 def normalize_url(url: str) -> str:
@@ -127,6 +134,17 @@ def parse_html(html: str, base_url: str) -> Dict[str, object]:
             contact_page_url = resolved_href
             break
 
+    if not has_contact_page_link:
+        for link in soup.find_all("a", href=True):
+            href = link.get("href", "")
+            anchor_text = link.get_text(" ", strip=True).lower()
+            resolved_href = urljoin(base_url, href)
+            haystack = f"{anchor_text} {href.lower()} {resolved_href.lower()}"
+            if any(hint in haystack for hint in CONTACT_LINK_HINTS):
+                has_contact_page_link = True
+                contact_page_url = resolved_href
+                break
+
     return {
         "title": title,
         "meta_description_present": meta_description_present,
@@ -136,6 +154,58 @@ def parse_html(html: str, base_url: str) -> Dict[str, object]:
         "has_contact_page_link": has_contact_page_link,
         "contact_page_url": contact_page_url or "",
     }
+
+
+def is_usable_contact_form(form: BeautifulSoup) -> bool:
+    descriptor_parts = [
+        str(form.get("action", "")),
+        str(form.get("id", "")),
+        " ".join(form.get("class", [])),
+    ]
+    descriptor = " ".join(descriptor_parts).lower()
+    if "search" in descriptor:
+        return False
+
+    textarea_exists = form.find("textarea") is not None
+    email_input = form.find("input", attrs={"type": re.compile(r"^email$", re.I)})
+    email_name_input = form.find("input", attrs={"name": re.compile(r"email", re.I)})
+    submit_button = form.find("button", attrs={"type": re.compile(r"^submit$", re.I)})
+    submit_input = form.find("input", attrs={"type": re.compile(r"^submit$", re.I)})
+    has_submit = bool(submit_button or submit_input)
+
+    relevant_inputs = form.find_all("input")
+    text_like_inputs = [
+        input_tag
+        for input_tag in relevant_inputs
+        if str(input_tag.get("type", "text")).lower() in {"", "text"}
+    ]
+    has_other_input_types = any(
+        str(input_tag.get("type", "text")).lower() not in {"", "text"}
+        for input_tag in relevant_inputs
+    )
+
+    if len(text_like_inputs) == 1 and not textarea_exists and not email_input and not email_name_input and not has_other_input_types:
+        return False
+
+    return bool(textarea_exists or email_input or email_name_input or has_submit)
+
+
+def detect_contact_form(html: str) -> bool:
+    soup = BeautifulSoup(html, "html.parser")
+    forms = soup.find_all("form")
+    if not forms:
+        return False
+    return any(is_usable_contact_form(form) for form in forms)
+
+
+def select_outreach_channel(has_email: bool, has_contact_form: bool, has_phone: bool) -> str:
+    if has_email:
+        return "email"
+    if has_contact_form:
+        return "form"
+    if has_phone:
+        return "phone"
+    return "none"
 
 
 def merge_emails(*email_lists: List[str]) -> List[str]:
@@ -284,6 +354,11 @@ def grade_website(url: str) -> Dict[str, object]:
         "has_contact_page_link": False,
         "contact_page_url": "",
         "contact_page_reachable": False,
+        "has_contact_form": False,
+        "contact_form_url": "",
+        "outreach_channel": "none",
+        "form_message": "",
+        "call_script": "",
         "notes": "",
         "reasons": "",
         "score_0_100": 0,
@@ -319,6 +394,10 @@ def grade_website(url: str) -> Dict[str, object]:
 
                     contact_content_type = contact_response.headers.get("Content-Type", "").lower()
                     if "text/html" in contact_content_type:
+                        result["has_contact_form"] = detect_contact_form(contact_response.text)
+                        if result["has_contact_form"]:
+                            result["contact_form_url"] = contact_response.url
+
                         contact_data = parse_html(contact_response.text, contact_response.url)
                         result["has_phone"] = bool(result["has_phone"] or contact_data["has_phone"])
                         combined_emails = merge_emails(
@@ -342,6 +421,11 @@ def grade_website(url: str) -> Dict[str, object]:
             result["emails"] = "; ".join(combined_emails)
             result["primary_email"] = combined_emails[0] if combined_emails else ""
             result["has_email"] = bool(combined_emails)
+            result["outreach_channel"] = select_outreach_channel(
+                bool(result["has_email"]),
+                bool(result["has_contact_form"]),
+                bool(result["has_phone"]),
+            )
 
     except requests.exceptions.Timeout:
         result["notes"] = f"Request timed out after {TIMEOUT_SECONDS}s"
@@ -354,6 +438,11 @@ def grade_website(url: str) -> Dict[str, object]:
     result["score_0_100"] = calculate_score(result)
     result["opportunity_score_0_100"] = calculate_opportunity_score(result)
     result["pitch"] = build_pitch(result)
+    result["outreach_channel"] = select_outreach_channel(
+        bool(result.get("has_email")),
+        bool(result.get("has_contact_form")),
+        bool(result.get("has_phone")),
+    )
     return result
 
 
@@ -388,6 +477,11 @@ def write_report(rows: List[Dict[str, object]], output_path: str) -> None:
         "has_email",
         "primary_email",
         "emails",
+        "has_contact_form",
+        "contact_form_url",
+        "outreach_channel",
+        "form_message",
+        "call_script",
         "has_contact_page_link",
         "contact_page_url",
         "contact_page_reachable",
