@@ -10,7 +10,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
-from main import MAX_WORKERS, PRIORITY_OUTPUT_FILE, grade_website, write_priority_leads
+from main import MAX_WORKERS, PRIORITY_OUTPUT_FILE, grade_website
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_ENDPOINTS = [
@@ -274,6 +274,8 @@ def write_graded_report(path: str, rows: List[Dict[str, object]]) -> None:
         "meta_description_present",
         "has_phone",
         "has_email",
+        "primary_email",
+        "emails",
         "has_contact_page_link",
         "contact_page_url",
         "contact_page_reachable",
@@ -331,6 +333,8 @@ def build_priority_row(row: Dict[str, object]) -> Dict[str, object]:
     return {
         "business_name": row.get("business_name", ""),
         "phone": row.get("phone", ""),
+        "primary_email": row.get("primary_email", ""),
+        "emails": row.get("emails", ""),
         "url": row.get("url", ""),
         "opportunity_score_0_100": row.get("opportunity_score_0_100", ""),
         "score_0_100": row.get("score_0_100", ""),
@@ -388,6 +392,8 @@ def write_priority_leads(path: str, rows: List[Dict[str, object]]) -> int:
     fieldnames = [
         "business_name",
         "phone",
+        "primary_email",
+        "emails",
         "url",
         "opportunity_score_0_100",
         "score_0_100",
@@ -439,6 +445,8 @@ def write_outreach_sheet(path: str, prioritized_rows: List[Dict[str, object]], c
         "business_name",
         "city",
         "phone",
+        "primary_email",
+        "emails",
         "url",
         "opportunity_score_0_100",
         "score_0_100",
@@ -465,6 +473,8 @@ def write_outreach_sheet(path: str, prioritized_rows: List[Dict[str, object]], c
                 row.get("business_name", ""),
                 city_name,
                 row.get("phone", ""),
+                row.get("primary_email", ""),
+                row.get("emails", ""),
                 row.get("url", ""),
                 row.get("opportunity_score_0_100", ""),
                 row.get("score_0_100", ""),
