@@ -1,5 +1,6 @@
 import argparse
 import csv
+import random
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -16,6 +17,7 @@ NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.nchc.org.tw/api/interpreter",
     "https://overpass.openstreetmap.ru/api/interpreter",
 ]
 USER_AGENT = "WebsiteGrader-FindAndGrade/1.0 (contact: nathan.strickland.consult@gmail.com)"
@@ -23,6 +25,8 @@ NOMINATIM_EMAIL = "nathan.strickland.consult@gmail.com"
 REQUEST_DELAY_SECONDS = 1.0
 OVERPASS_MAX_RETRIES = 3
 OVERPASS_BACKOFF_SECONDS = 2.0
+OVERPASS_JITTER_SECONDS = 0.5
+OVERPASS_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 RAW_OUTPUT_FILE = "leads_raw.csv"
 GRADED_OUTPUT_FILE = "report.csv"
 PRIORITY_LEADS_OUTPUT_FILE = "priority_leads.csv"
@@ -90,33 +94,57 @@ out center tags;
 
 
 def fetch_overpass_elements(overpass_query: str, overpass_timeout: int) -> List[Dict[str, object]]:
+    response_payload = call_overpass(overpass_query, overpass_timeout)
+    return response_payload.get("elements", [])
+
+
+def call_overpass(query: str, overpass_timeout: int) -> Dict[str, object]:
     last_exception: Optional[Exception] = None
+    tried_endpoints: List[str] = []
+    timeout_seconds = overpass_timeout + 30
+
     for endpoint in OVERPASS_ENDPOINTS:
+        tried_endpoints.append(endpoint)
+
         for attempt in range(1, OVERPASS_MAX_RETRIES + 1):
             try:
                 response = requests.post(
                     endpoint,
-                    data=overpass_query,
+                    data={"data": query},
                     headers={"User-Agent": USER_AGENT},
-                    timeout=overpass_timeout + 30,
+                    timeout=timeout_seconds,
                 )
+
+                if response.status_code in OVERPASS_RETRYABLE_STATUS_CODES:
+                    raise requests.HTTPError(
+                        f"HTTP {response.status_code}",
+                        response=response,
+                    )
                 response.raise_for_status()
-                return response.json().get("elements", [])
+                return response.json()
             except (requests.RequestException, ValueError) as exc:
                 last_exception = exc
+                error_details = str(exc)
+                if isinstance(exc, requests.HTTPError) and exc.response is not None:
+                    error_details = f"HTTP {exc.response.status_code}"
+
+                print(
+                    f"Overpass request failed at {endpoint} "
+                    f"(attempt {attempt}/{OVERPASS_MAX_RETRIES}): {error_details}"
+                )
+
                 if attempt < OVERPASS_MAX_RETRIES:
                     backoff_seconds = OVERPASS_BACKOFF_SECONDS * (2 ** (attempt - 1))
-                    print(
-                        f"Overpass request failed at {endpoint} (attempt {attempt}/{OVERPASS_MAX_RETRIES}). "
-                        f"Retrying in {backoff_seconds:.1f}s..."
-                    )
-                    time.sleep(backoff_seconds)
+                    jitter_seconds = random.uniform(0, OVERPASS_JITTER_SECONDS)
+                    time.sleep(backoff_seconds + jitter_seconds)
                 else:
                     print(f"Overpass endpoint exhausted: {endpoint}")
 
+    endpoints_text = ", ".join(tried_endpoints)
+    error_message = f"All Overpass endpoints failed after retries. Tried: {endpoints_text}"
     if last_exception is not None:
-        raise RuntimeError("All Overpass endpoints failed after retries.") from last_exception
-    raise RuntimeError("All Overpass endpoints failed without a specific exception.")
+        raise RuntimeError(error_message) from last_exception
+    raise RuntimeError(error_message)
 
 
 def first_tag(tags: Dict[str, str], keys: List[str]) -> str:
