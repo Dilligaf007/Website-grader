@@ -6,6 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Set, Tuple
 
 import requests
+from openpyxl import Workbook
+from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 
 from main import MAX_WORKERS, PRIORITY_OUTPUT_FILE, grade_website, write_priority_leads
 
@@ -23,6 +26,7 @@ OVERPASS_BACKOFF_SECONDS = 2.0
 RAW_OUTPUT_FILE = "leads_raw.csv"
 GRADED_OUTPUT_FILE = "report.csv"
 PRIORITY_LEADS_OUTPUT_FILE = "priority_leads.csv"
+OUTREACH_SHEET_OUTPUT_FILE = "outreach_sheet.xlsx"
 
 WEBSITE_KEYS = ["website", "contact:website", "url"]
 PHONE_KEYS = ["phone", "contact:phone"]
@@ -335,6 +339,22 @@ def build_priority_row(row: Dict[str, object]) -> Dict[str, object]:
     }
 
 
+def get_priority_rows(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    filtered_rows = [
+        row
+        for row in rows
+        if is_true(row.get("reachable"))
+        and is_true(row.get("has_phone"))
+        and str(row.get("url", "")).strip()
+        and as_float(row.get("opportunity_score_0_100", 0)) > 0
+    ]
+    return sorted(
+        filtered_rows,
+        key=lambda row: as_float(row.get("opportunity_score_0_100", 0)),
+        reverse=True,
+    )
+
+
 def normalize_rows(rows: object) -> List[Dict[str, object]]:
     if isinstance(rows, dict):
         values = list(rows.values())
@@ -363,19 +383,7 @@ def normalize_rows(rows: object) -> List[Dict[str, object]]:
 
 def write_priority_leads(path: str, rows: List[Dict[str, object]]) -> int:
     normalized_rows = normalize_rows(rows)
-    filtered_rows = [
-        row
-        for row in normalized_rows
-        if is_true(row.get("reachable"))
-        and is_true(row.get("has_phone"))
-        and str(row.get("url", "")).strip()
-        and as_float(row.get("opportunity_score_0_100", 0)) > 0
-    ]
-    sorted_rows = sorted(
-        filtered_rows,
-        key=lambda row: as_float(row.get("opportunity_score_0_100", 0)),
-        reverse=True,
-    )
+    sorted_rows = get_priority_rows(normalized_rows)
 
     fieldnames = [
         "business_name",
@@ -393,6 +401,101 @@ def write_priority_leads(path: str, rows: List[Dict[str, object]]) -> int:
         writer.writerows(build_priority_row(row) for row in sorted_rows)
 
     return len(sorted_rows)
+
+
+def clean_specific_issue(reasons: object, pitch: object) -> str:
+    first_reason = str(reasons or "").split(";")[0].strip()
+    if first_reason:
+        return first_reason.replace("_", " ")
+    return str(pitch or "website improvements").strip()
+
+
+def build_email_content(row: Dict[str, object]) -> Tuple[str, str]:
+    score = as_float(row.get("score_0_100", 0))
+    business_name = str(row.get("business_name", "your business")).strip() or "your business"
+    specific_issue = clean_specific_issue(row.get("reasons", ""), row.get("pitch", ""))
+
+    if score >= 75:
+        tier = "Tier A"
+    elif score >= 50:
+        tier = "Tier B"
+    else:
+        tier = "Tier C"
+
+    subject = f"Quick win idea for {business_name} ({tier})"
+    body = (
+        f"Hi {business_name} team,\n\n"
+        "I took a quick look at your website and noticed one specific issue: "
+        f"{specific_issue}.\n\n"
+        f"You're currently in {tier} in our grading pass, and I can share a short plan to fix this quickly "
+        "and improve inbound lead conversion.\n\n"
+        "Would you like me to send over a 3-step recommendation?"
+    )
+    return subject, body
+
+
+def write_outreach_sheet(path: str, prioritized_rows: List[Dict[str, object]], city_name: str) -> None:
+    headers = [
+        "business_name",
+        "city",
+        "phone",
+        "url",
+        "opportunity_score_0_100",
+        "score_0_100",
+        "reasons",
+        "pitch",
+        "email_subject",
+        "email_body",
+        "email_sent",
+        "followup_1_sent",
+        "followup_2_sent",
+        "response",
+        "status",
+    ]
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Outreach"
+    sheet.append(headers)
+
+    for row in prioritized_rows:
+        email_subject, email_body = build_email_content(row)
+        sheet.append(
+            [
+                row.get("business_name", ""),
+                city_name,
+                row.get("phone", ""),
+                row.get("url", ""),
+                row.get("opportunity_score_0_100", ""),
+                row.get("score_0_100", ""),
+                row.get("reasons", ""),
+                row.get("pitch", ""),
+                email_subject,
+                email_body,
+                "",
+                "",
+                "",
+                "",
+                "",
+            ]
+        )
+
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+
+    for col_idx, _ in enumerate(headers, start=1):
+        column_letter = get_column_letter(col_idx)
+        max_len = 0
+        for cell in sheet[column_letter]:
+            value_len = len(str(cell.value)) if cell.value is not None else 0
+            if value_len > max_len:
+                max_len = value_len
+        sheet.column_dimensions[column_letter].width = min(max(max_len + 2, 12), 80)
+
+    workbook.save(path)
 
 
 def parse_args() -> argparse.Namespace:
@@ -446,6 +549,9 @@ def main() -> None:
     ]
     write_graded_report(GRADED_OUTPUT_FILE, report_rows)
     priority_count = write_priority_leads(path=PRIORITY_OUTPUT_FILE, rows=report_rows)
+    prioritized_rows = get_priority_rows(report_rows)
+    city_name = str(args.city).split(",", maxsplit=1)[0].strip()
+    write_outreach_sheet(OUTREACH_SHEET_OUTPUT_FILE, prioritized_rows, city_name)
 
     missing_phone_count = sum(1 for row in report_rows if not str(row.get("phone", "")).strip())
 
@@ -454,6 +560,7 @@ def main() -> None:
         f"Graded {len(report_rows)} lead(s) with websites. Report saved to {GRADED_OUTPUT_FILE}."
     )
     print(f"Created {PRIORITY_OUTPUT_FILE} with {priority_count} prioritized leads.")
+    print(f"Created {OUTREACH_SHEET_OUTPUT_FILE} with {priority_count} prioritized leads.")
     print(f"Total graded websites: {len(report_rows)}")
     print(f"Included in {PRIORITY_OUTPUT_FILE}: {priority_count}")
     print(f"Missing phone: {missing_phone_count}")
