@@ -304,6 +304,11 @@ def write_graded_report(path: str, rows: List[Dict[str, object]]) -> None:
         "has_email",
         "primary_email",
         "emails",
+        "has_contact_form",
+        "contact_form_url",
+        "outreach_channel",
+        "form_message",
+        "call_script",
         "has_contact_page_link",
         "contact_page_url",
         "contact_page_reachable",
@@ -363,6 +368,11 @@ def build_priority_row(row: Dict[str, object]) -> Dict[str, object]:
         "phone": row.get("phone", ""),
         "primary_email": row.get("primary_email", ""),
         "emails": row.get("emails", ""),
+        "has_contact_form": row.get("has_contact_form", False),
+        "contact_form_url": row.get("contact_form_url", ""),
+        "outreach_channel": row.get("outreach_channel", "none"),
+        "form_message": row.get("form_message", ""),
+        "call_script": row.get("call_script", ""),
         "url": row.get("url", ""),
         "opportunity_score_0_100": row.get("opportunity_score_0_100", ""),
         "score_0_100": row.get("score_0_100", ""),
@@ -422,6 +432,11 @@ def write_priority_leads(path: str, rows: List[Dict[str, object]]) -> int:
         "phone",
         "primary_email",
         "emails",
+        "has_contact_form",
+        "contact_form_url",
+        "outreach_channel",
+        "form_message",
+        "call_script",
         "url",
         "opportunity_score_0_100",
         "score_0_100",
@@ -468,6 +483,39 @@ def build_email_content(row: Dict[str, object]) -> Tuple[str, str]:
     return subject, body
 
 
+def build_form_message(row: Dict[str, object], city_name: str) -> str:
+    business_name = str(row.get("business_name", "your business")).strip() or "your business"
+    specific_issue = clean_specific_issue(row.get("reasons", ""), row.get("pitch", ""))
+    city_fragment = f" in {city_name}" if city_name else ""
+    return (
+        f"Hi {business_name} team — I ran a quick website audit for local plumbing companies{city_fragment} and spotted one issue: "
+        f"{specific_issue}. I can send a short 3-step fix plan to improve inbound leads. "
+        "Would you like me to share it here?"
+    )
+
+
+def build_call_script(row: Dict[str, object], city_name: str) -> str:
+    business_name = str(row.get("business_name", "your business")).strip() or "your business"
+    specific_issue = clean_specific_issue(row.get("reasons", ""), row.get("pitch", ""))
+    city_fragment = f" in {city_name}" if city_name else ""
+    return (
+        f"Hi, this is Nathan — I did a quick website audit for {business_name}{city_fragment} and noticed one issue: {specific_issue}. "
+        "Could you point me to who handles your website, or the best email where I can send a short 3-step plan?"
+    )
+
+
+def populate_channel_messages(rows: List[Dict[str, object]], city_name: str) -> None:
+    for row in rows:
+        channel = str(row.get("outreach_channel", "none")).strip().lower()
+        if channel == "none":
+            row["form_message"] = ""
+            row["call_script"] = ""
+            continue
+
+        row["form_message"] = build_form_message(row, city_name)
+        row["call_script"] = build_call_script(row, city_name)
+
+
 def write_outreach_sheet(path: str, prioritized_rows: List[Dict[str, object]], city_name: str) -> None:
     headers = [
         "business_name",
@@ -475,6 +523,11 @@ def write_outreach_sheet(path: str, prioritized_rows: List[Dict[str, object]], c
         "phone",
         "primary_email",
         "emails",
+        "has_contact_form",
+        "contact_form_url",
+        "outreach_channel",
+        "form_message",
+        "call_script",
         "url",
         "opportunity_score_0_100",
         "score_0_100",
@@ -503,6 +556,11 @@ def write_outreach_sheet(path: str, prioritized_rows: List[Dict[str, object]], c
                 row.get("phone", ""),
                 row.get("primary_email", ""),
                 row.get("emails", ""),
+                row.get("has_contact_form", False),
+                row.get("contact_form_url", ""),
+                row.get("outreach_channel", "none"),
+                row.get("form_message", ""),
+                row.get("call_script", ""),
                 row.get("url", ""),
                 row.get("opportunity_score_0_100", ""),
                 row.get("score_0_100", ""),
@@ -585,10 +643,11 @@ def main() -> None:
         build_graded_row(lead, graded)
         for lead, graded in zip(leads_with_websites, graded_rows)
     ]
+    city_name = str(args.city).split(",", maxsplit=1)[0].strip()
+    populate_channel_messages(report_rows, city_name)
     write_graded_report(GRADED_OUTPUT_FILE, report_rows)
     priority_count = write_priority_leads(path=PRIORITY_OUTPUT_FILE, rows=report_rows)
     prioritized_rows = get_priority_rows(report_rows)
-    city_name = str(args.city).split(",", maxsplit=1)[0].strip()
     write_outreach_sheet(OUTREACH_SHEET_OUTPUT_FILE, prioritized_rows, city_name)
 
     missing_phone_count = sum(1 for row in report_rows if not str(row.get("phone", "")).strip())
