@@ -1,4 +1,5 @@
 import csv
+import os
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -7,6 +8,8 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+
+from google_sheets_export import export_to_google_sheets
 
 INPUT_FILE = "websites.txt"
 OUTPUT_FILE = "report.csv"
@@ -564,6 +567,14 @@ def main() -> None:
     print(f"Total graded websites: {len(rows)}")
     print(f"Included in {PRIORITY_OUTPUT_FILE}: {priority_count}")
     print(f"Missing phone: {missing_phone_count}")
+
+    export_to_google_sheets(
+        [
+            (OUTPUT_FILE, os.getenv("GOOGLE_SHEETS_TAB_REPORT", "report")),
+            (PRIORITY_OUTPUT_FILE, os.getenv("GOOGLE_SHEETS_TAB_PRIORITY", "priority_leads")),
+            ("leads_raw.csv", os.getenv("GOOGLE_SHEETS_TAB_LEADS_RAW", "leads_raw")),
+        ]
+    )
 
 
 if __name__ == "__main__":
