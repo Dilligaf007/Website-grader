@@ -305,7 +305,7 @@ def parse_terms(terms_arg: str) -> List[str]:
 
 
 def write_raw_leads(path: str, leads: List[Dict[str, object]]) -> None:
-    fieldnames = [
+    base_fieldnames = [
         "name",
         "website",
         "phone",
@@ -320,6 +320,16 @@ def write_raw_leads(path: str, leads: List[Dict[str, object]]) -> None:
         "osm_tags_json",
         "inclusion_reason",
     ]
+    extra_fieldnames = sorted(
+        {
+            str(key)
+            for lead in leads
+            for key in lead.keys()
+            if str(key) not in base_fieldnames
+        }
+    )
+    fieldnames = [*base_fieldnames, *extra_fieldnames]
+
     with open(path, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
