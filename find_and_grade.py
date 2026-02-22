@@ -1,5 +1,6 @@
 import argparse
 import csv
+import os
 import random
 import re
 import time
@@ -11,6 +12,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
+from google_sheets_export import export_to_google_sheets
 from main import MAX_WORKERS, PRIORITY_OUTPUT_FILE, grade_website
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
@@ -661,6 +663,14 @@ def main() -> None:
     print(f"Total graded websites: {len(report_rows)}")
     print(f"Included in {PRIORITY_OUTPUT_FILE}: {priority_count}")
     print(f"Missing phone: {missing_phone_count}")
+
+    export_to_google_sheets(
+        [
+            (GRADED_OUTPUT_FILE, os.getenv("GOOGLE_SHEETS_TAB_REPORT", "report")),
+            (PRIORITY_LEADS_OUTPUT_FILE, os.getenv("GOOGLE_SHEETS_TAB_PRIORITY", "priority_leads")),
+            (RAW_OUTPUT_FILE, os.getenv("GOOGLE_SHEETS_TAB_LEADS_RAW", "leads_raw")),
+        ]
+    )
 
 
 if __name__ == "__main__":

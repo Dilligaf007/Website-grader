@@ -37,6 +37,10 @@ python main.py
 
 After running, `report.csv` and `priority_leads.csv` will be created in the project directory. Use `priority_leads.csv` for first-pass outreach.
 
+If Google Sheets export is not configured, the run continues normally and prints:
+
+`Google Sheets export skipped (missing GOOGLE_SHEETS_ID / GOOGLE_SERVICE_ACCOUNT_JSON)`
+
 ## Run: find and grade plumbers from OpenStreetMap
 
 ```bash
@@ -110,3 +114,51 @@ python enhance_outreach_sheet.py
 ```
 
 This adds/updates `email_subject` and `email_body` columns, applies tier-based templates from `opportunity_score_0_100`, preserves existing columns, and freezes the header row.
+
+## Optional: export CSV outputs to Google Sheets
+
+Both pipelines can optionally export generated CSV files into a Google Spreadsheet using the official Google API client libraries (`gspread` + `google-auth`).
+
+### 1) Create a Google Cloud service account
+
+1. Open Google Cloud Console and create/select a project.
+2. Enable **Google Sheets API** and **Google Drive API** for that project.
+3. Go to **IAM & Admin > Service Accounts**, create a service account, and create a JSON key.
+4. Download the key file and store it securely (for example: `./secrets/service-account.json`).
+
+### 2) Share the target spreadsheet
+
+- Open your target Google Sheet and click **Share**.
+- Add the service account email (from the JSON key, `client_email`) as an editor.
+
+### 3) Set environment variables
+
+Required:
+
+```bash
+export GOOGLE_SHEETS_ID="your_spreadsheet_id"
+export GOOGLE_SERVICE_ACCOUNT_JSON="./secrets/service-account.json"
+```
+
+Optional tab names (defaults shown):
+
+```bash
+export GOOGLE_SHEETS_TAB_REPORT="report"
+export GOOGLE_SHEETS_TAB_PRIORITY="priority_leads"
+export GOOGLE_SHEETS_TAB_LEADS_RAW="leads_raw"
+```
+
+### 4) Run the pipeline as usual
+
+- `python main.py` exports existing `report.csv` and `priority_leads.csv` (and `leads_raw.csv` if present).
+- `python find_and_grade.py --city "Austin, TX"` exports `report.csv`, `priority_leads.csv`, and `leads_raw.csv`.
+
+For each exported CSV, the script will:
+- create the tab if missing,
+- clear existing tab contents,
+- write all CSV rows including headers,
+- freeze the header row.
+
+A success line is printed per tab, for example:
+
+`Exported report.csv -> tab 'report'`
