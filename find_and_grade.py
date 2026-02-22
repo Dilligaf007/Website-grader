@@ -79,17 +79,16 @@ def build_name_regex(terms: List[str]) -> str:
 
 
 def build_overpass_query(lat: float, lon: float, radius_km: float, terms: List[str], overpass_timeout: int) -> str:
-    name_regex = build_name_regex(terms).replace('"', '\\"')
     radius_m = int(radius_km * 1000)
     return f"""
 [out:json][timeout:{overpass_timeout}];
 (
-  nwr(around:{radius_m},{lat},{lon})["craft"="plumber"];
-  nwr(around:{radius_m},{lat},{lon})["shop"="plumbing"];
-  nwr(around:{radius_m},{lat},{lon})["name"~"{name_regex}",i];
-  nwr(around:{radius_m},{lat},{lon})["description"~"{name_regex}",i];
-  nwr(around:{radius_m},{lat},{lon})["brand"~"{name_regex}",i];
-  nwr(around:{radius_m},{lat},{lon})["operator"~"{name_regex}",i];
+  node(around:{radius_m},{lat},{lon})["shop"="plumber"];
+  way(around:{radius_m},{lat},{lon})["shop"="plumber"];
+  relation(around:{radius_m},{lat},{lon})["shop"="plumber"];
+  node(around:{radius_m},{lat},{lon})["craft"="plumber"];
+  way(around:{radius_m},{lat},{lon})["craft"="plumber"];
+  relation(around:{radius_m},{lat},{lon})["craft"="plumber"];
 );
 out center tags;
 """.strip()
