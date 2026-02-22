@@ -1,5 +1,6 @@
 import argparse
 import csv
+import json
 import os
 import random
 import re
@@ -37,6 +38,9 @@ OUTREACH_SHEET_OUTPUT_FILE = "outreach_sheet.xlsx"
 WEBSITE_KEYS = ["website", "contact:website", "url"]
 PHONE_KEYS = ["phone", "contact:phone"]
 DEFAULT_TERMS = ["plumber", "plumbing", "drain", "sewer", "rooter", "pipe", "water heater"]
+EXCLUDED_AMENITIES = {"school", "college", "university", "kindergarten"}
+EXCLUDED_NAME_TERMS = ["school", "elementary", "middle school", "high school", "academy", "university"]
+PLUMBING_NAME_KEYWORDS = ["plumb", "drain", "sewer", "water heater"]
 
 
 def clean_whitespace(value: str) -> str:
@@ -79,6 +83,7 @@ def build_name_regex(terms: List[str]) -> str:
 
 
 def build_overpass_query(lat: float, lon: float, radius_km: float, terms: List[str], overpass_timeout: int) -> str:
+    del terms
     radius_m = int(radius_km * 1000)
     return f"""
 [out:json][timeout:{overpass_timeout}];
@@ -92,6 +97,31 @@ def build_overpass_query(lat: float, lon: float, radius_km: float, terms: List[s
 );
 out center;
 """.strip()
+
+
+def is_target_plumber(tags: Dict[str, str], name: str) -> Tuple[bool, str]:
+    normalized_tags = {str(k).strip().lower(): str(v).strip().lower() for k, v in (tags or {}).items()}
+    normalized_name = (name or "").strip().lower()
+
+    amenity = normalized_tags.get("amenity", "")
+    if amenity in EXCLUDED_AMENITIES:
+        return False, f"excluded_amenity={amenity}"
+
+    for term in EXCLUDED_NAME_TERMS:
+        if term in normalized_name:
+            return False, f"excluded_name_term={term}"
+
+    if normalized_tags.get("shop") == "plumber":
+        return True, "shop=plumber"
+    if normalized_tags.get("craft") == "plumber":
+        return True, "craft=plumber"
+
+    if not normalized_tags:
+        for keyword in PLUMBING_NAME_KEYWORDS:
+            if keyword in normalized_name:
+                return True, "name_keyword_fallback"
+
+    return False, "missing_plumber_tag"
 
 
 def fetch_overpass_elements(overpass_query: str, overpass_timeout: int) -> List[Dict[str, object]]:
@@ -174,6 +204,7 @@ def build_address(tags: Dict[str, str]) -> str:
 def parse_element(element: Dict[str, object]) -> Dict[str, object]:
     tags = element.get("tags", {}) or {}
     tags = {str(k): str(v) for k, v in tags.items()}
+    include, inclusion_reason = is_target_plumber(tags, tags.get("name", ""))
 
     lat = element.get("lat")
     lon = element.get("lon")
@@ -195,6 +226,12 @@ def parse_element(element: Dict[str, object]) -> Dict[str, object]:
         "lon": lon,
         "osm_type": osm_type,
         "osm_id": osm_id,
+        "osm_shop": tags.get("shop", ""),
+        "osm_craft": tags.get("craft", ""),
+        "osm_amenity": tags.get("amenity", ""),
+        "osm_tags_json": json.dumps(tags, separators=(",", ":"), sort_keys=True),
+        "is_target_plumber": include,
+        "inclusion_reason": inclusion_reason,
     }
 
 
@@ -256,7 +293,7 @@ def find_businesses(
     print(overpass_query)
     print("------------------------")
     elements = fetch_overpass_elements(overpass_query, overpass_timeout)
-    leads = [parse_element(element) for element in elements]
+    leads = [lead for lead in (parse_element(element) for element in elements) if is_true(lead.get("is_target_plumber", False))]
     deduped = dedupe_leads(leads)
     ordered = sort_leads(deduped)
     return ordered[:limit]
@@ -268,7 +305,21 @@ def parse_terms(terms_arg: str) -> List[str]:
 
 
 def write_raw_leads(path: str, leads: List[Dict[str, object]]) -> None:
-    fieldnames = ["name", "website", "phone", "address", "lat", "lon", "osm_type", "osm_id"]
+    fieldnames = [
+        "name",
+        "website",
+        "phone",
+        "address",
+        "lat",
+        "lon",
+        "osm_type",
+        "osm_id",
+        "osm_shop",
+        "osm_craft",
+        "osm_amenity",
+        "osm_tags_json",
+        "inclusion_reason",
+    ]
     with open(path, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
