@@ -83,14 +83,14 @@ def build_overpass_query(lat: float, lon: float, radius_km: float, terms: List[s
     return f"""
 [out:json][timeout:{overpass_timeout}];
 (
-  node(around:{radius_m},{lat},{lon})["shop"="plumber"];
-  way(around:{radius_m},{lat},{lon})["shop"="plumber"];
-  relation(around:{radius_m},{lat},{lon})["shop"="plumber"];
-  node(around:{radius_m},{lat},{lon})["craft"="plumber"];
-  way(around:{radius_m},{lat},{lon})["craft"="plumber"];
-  relation(around:{radius_m},{lat},{lon})["craft"="plumber"];
+  node["shop"="plumber"](around:{radius_m},{lat},{lon});
+  way["shop"="plumber"](around:{radius_m},{lat},{lon});
+  relation["shop"="plumber"](around:{radius_m},{lat},{lon});
+  node["craft"="plumber"](around:{radius_m},{lat},{lon});
+  way["craft"="plumber"](around:{radius_m},{lat},{lon});
+  relation["craft"="plumber"](around:{radius_m},{lat},{lon});
 );
-out center tags;
+out center;
 """.strip()
 
 
@@ -252,6 +252,9 @@ def find_businesses(
     time.sleep(REQUEST_DELAY_SECONDS)
 
     overpass_query = build_overpass_query(lat, lon, radius_km, terms, overpass_timeout)
+    print("---- OVERPASS QUERY ----")
+    print(overpass_query)
+    print("------------------------")
     elements = fetch_overpass_elements(overpass_query, overpass_timeout)
     leads = [parse_element(element) for element in elements]
     deduped = dedupe_leads(leads)
