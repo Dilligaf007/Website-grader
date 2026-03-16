@@ -4,9 +4,10 @@ import json
 import os
 import random
 import re
+from urllib.parse import urlparse
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import requests
 from openpyxl import Workbook
@@ -25,6 +26,8 @@ OVERPASS_ENDPOINTS = [
 ]
 USER_AGENT = "WebsiteGrader-FindAndGrade/1.0 (contact: nathan.strickland.consult@gmail.com)"
 NOMINATIM_EMAIL = "nathan.strickland.consult@gmail.com"
+YELP_SEARCH_URL = "https://api.yelp.com/v3/businesses/search"
+BING_LOCAL_SEARCH_URL = "https://api.bing.microsoft.com/v7.0/localbusinesses/search"
 REQUEST_DELAY_SECONDS = 1.0
 OVERPASS_MAX_RETRIES = 3
 OVERPASS_BACKOFF_SECONDS = 2.0
@@ -219,7 +222,9 @@ def parse_element(element: Dict[str, object]) -> Dict[str, object]:
 
     return {
         "name": tags.get("name", "").strip(),
+        "business_name": tags.get("name", "").strip(),
         "website": first_tag(tags, WEBSITE_KEYS),
+        "website_url": first_tag(tags, WEBSITE_KEYS),
         "phone": first_tag(tags, PHONE_KEYS),
         "address": build_address(tags),
         "lat": lat,
@@ -232,37 +237,81 @@ def parse_element(element: Dict[str, object]) -> Dict[str, object]:
         "osm_tags_json": json.dumps(tags, separators=(",", ":"), sort_keys=True),
         "is_target_plumber": include,
         "inclusion_reason": inclusion_reason,
+        "source": "osm",
+        "sources": "osm",
+        "source_listing_url": "",
+        "source_id": f"{osm_type}/{osm_id}" if osm_type and osm_id else "",
     }
 
 
+def normalize_domain(url: object) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    if not re.match(r"^https?://", value, flags=re.IGNORECASE):
+        value = f"https://{value}"
+    parsed = urlparse(value)
+    domain = parsed.netloc.lower().strip()
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain
+
+
+def normalize_phone(phone: object) -> str:
+    return re.sub(r"\D", "", str(phone or ""))
+
+
+def normalized_name_address(lead: Dict[str, object]) -> Tuple[str, str]:
+    name = clean_whitespace(str(lead.get("business_name") or lead.get("name") or "").lower())
+    address = clean_whitespace(str(lead.get("address", "")).lower())
+    return name, address
+
+
 def dedupe_leads(leads: List[Dict[str, object]]) -> List[Dict[str, object]]:
-    seen_websites: Set[str] = set()
-    seen_name_address: Set[Tuple[str, str]] = set()
-    deduped: List[Dict[str, object]] = []
+    deduped_map: Dict[str, Dict[str, object]] = {}
 
-    for lead in leads:
-        website = str(lead.get("website", "")).strip().lower().rstrip("/")
-        name = str(lead.get("name", "")).strip().lower()
-        address = str(lead.get("address", "")).strip().lower()
+    for index, lead in enumerate(leads):
+        website_domain = normalize_domain(lead.get("website_url") or lead.get("website"))
+        phone = normalize_phone(lead.get("phone"))
+        name, address = normalized_name_address(lead)
 
-        duplicate = False
-        if website:
-            if website in seen_websites:
-                duplicate = True
-            else:
-                seen_websites.add(website)
+        if website_domain:
+            dedupe_key = f"domain:{website_domain}"
+        elif phone:
+            dedupe_key = f"phone:{phone}"
+        elif name and address:
+            dedupe_key = f"name_address:{name}|{address}"
+        else:
+            dedupe_key = f"fallback:{index}"
 
-        name_address = (name, address)
-        if name and address:
-            if name_address in seen_name_address:
-                duplicate = True
-            else:
-                seen_name_address.add(name_address)
+        if dedupe_key not in deduped_map:
+            lead_copy = dict(lead)
+            if not str(lead_copy.get("business_name", "")).strip():
+                lead_copy["business_name"] = str(lead_copy.get("name", "")).strip()
+            if not str(lead_copy.get("name", "")).strip():
+                lead_copy["name"] = str(lead_copy.get("business_name", "")).strip()
+            if not str(lead_copy.get("website_url", "")).strip():
+                lead_copy["website_url"] = str(lead_copy.get("website", "")).strip()
+            if not str(lead_copy.get("website", "")).strip():
+                lead_copy["website"] = str(lead_copy.get("website_url", "")).strip()
+            source = str(lead_copy.get("source", "")).strip()
+            lead_copy["sources"] = source
+            deduped_map[dedupe_key] = lead_copy
+            continue
 
-        if not duplicate:
-            deduped.append(lead)
+        existing = deduped_map[dedupe_key]
+        merged_sources = {
+            source.strip()
+            for source in f"{existing.get('sources', '')};{lead.get('source', '')}".split(";")
+            if source.strip()
+        }
+        existing["sources"] = ";".join(sorted(merged_sources))
 
-    return deduped
+        for field in ("website", "website_url", "phone", "address", "source_listing_url", "source_id"):
+            if not str(existing.get(field, "")).strip() and str(lead.get(field, "")).strip():
+                existing[field] = lead.get(field, "")
+
+    return list(deduped_map.values())
 
 
 def sort_leads(leads: List[Dict[str, object]]) -> List[Dict[str, object]]:
@@ -285,6 +334,17 @@ def find_businesses(
     radius_km: float,
     overpass_timeout: int,
 ) -> List[Dict[str, object]]:
+    return discover_leads_osm(city=city, limit=limit, radius_km=radius_km, terms=terms, overpass_timeout=overpass_timeout)
+
+
+def discover_leads_osm(
+    city: str,
+    limit: int,
+    radius_km: float,
+    terms: Optional[List[str]] = None,
+    overpass_timeout: int = 180,
+) -> List[Dict[str, object]]:
+    terms = terms or DEFAULT_TERMS
     lat, lon = get_city_center(city)
     time.sleep(REQUEST_DELAY_SECONDS)
 
@@ -294,9 +354,102 @@ def find_businesses(
     print("------------------------")
     elements = fetch_overpass_elements(overpass_query, overpass_timeout)
     leads = [lead for lead in (parse_element(element) for element in elements) if is_true(lead.get("is_target_plumber", False))]
-    deduped = dedupe_leads(leads)
-    ordered = sort_leads(deduped)
+    ordered = sort_leads(leads)
     return ordered[:limit]
+
+
+def discover_leads_yelp(city: str, limit: int, radius_km: float) -> List[Dict[str, object]]:
+    api_key = os.getenv("YELP_API_KEY", "").strip()
+    if not api_key:
+        return []
+
+    radius_m = min(max(int(radius_km * 1000), 1), 40000)
+    params = {
+        "term": "plumber",
+        "location": city,
+        "limit": max(1, min(limit, 50)),
+        "radius": radius_m,
+    }
+    headers = {"Authorization": f"Bearer {api_key}", "User-Agent": USER_AGENT}
+
+    try:
+        response = requests.get(YELP_SEARCH_URL, params=params, headers=headers, timeout=20)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        print(f"Yelp discovery failed: {exc}")
+        return []
+
+    businesses = response.json().get("businesses", [])
+    leads: List[Dict[str, object]] = []
+    for business in businesses:
+        location = business.get("location") or {}
+        address_parts = [location.get("address1", ""), location.get("city", ""), location.get("state", ""), location.get("zip_code", "")]
+        leads.append(
+            {
+                "name": str(business.get("name", "")).strip(),
+                "business_name": str(business.get("name", "")).strip(),
+                "website": "",
+                "website_url": "",
+                "phone": str(business.get("display_phone") or business.get("phone") or "").strip(),
+                "address": clean_whitespace(", ".join(part for part in address_parts if part)),
+                "lat": (business.get("coordinates") or {}).get("latitude", ""),
+                "lon": (business.get("coordinates") or {}).get("longitude", ""),
+                "source": "yelp",
+                "source_listing_url": str(business.get("url", "")).strip(),
+                "source_id": str(business.get("id", "")).strip(),
+            }
+        )
+    return leads
+
+
+def discover_leads_bing(city: str, limit: int, radius_km: float) -> List[Dict[str, object]]:
+    del radius_km
+    api_key = os.getenv("BING_API_KEY", "").strip()
+    if not api_key:
+        return []
+
+    params = {
+        "q": f"plumber in {city}",
+        "count": max(1, min(limit, 50)),
+    }
+    headers = {"Ocp-Apim-Subscription-Key": api_key, "User-Agent": USER_AGENT}
+
+    try:
+        response = requests.get(BING_LOCAL_SEARCH_URL, params=params, headers=headers, timeout=20)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        print(f"Bing discovery failed: {exc}")
+        return []
+
+    values = response.json().get("value", [])
+    leads: List[Dict[str, object]] = []
+    for item in values:
+        address_info = item.get("address") or {}
+        address_parts = [address_info.get("addressLocality", ""), address_info.get("addressRegion", ""), address_info.get("postalCode", "")]
+        leads.append(
+            {
+                "name": str(item.get("name", "")).strip(),
+                "business_name": str(item.get("name", "")).strip(),
+                "website": str(item.get("website", "")).strip(),
+                "website_url": str(item.get("website", "")).strip(),
+                "phone": str(item.get("telephone", "")).strip(),
+                "address": clean_whitespace(", ".join(part for part in address_parts if part)),
+                "lat": (item.get("geo") or {}).get("latitude", ""),
+                "lon": (item.get("geo") or {}).get("longitude", ""),
+                "source": "bing",
+                "source_listing_url": str(item.get("url", "")).strip(),
+                "source_id": str(item.get("id", "")).strip(),
+            }
+        )
+    return leads
+
+
+def parse_lead_sources() -> List[str]:
+    configured = os.getenv("LEAD_SOURCES", "osm")
+    allowed = {"osm", "yelp", "bing"}
+    sources = [source.strip().lower() for source in configured.split(",") if source.strip()]
+    normalized = [source for source in sources if source in allowed]
+    return normalized or ["osm"]
 
 
 def parse_terms(terms_arg: str) -> List[str]:
@@ -307,11 +460,17 @@ def parse_terms(terms_arg: str) -> List[str]:
 def write_raw_leads(path: str, leads: List[Dict[str, object]]) -> None:
     base_fieldnames = [
         "name",
+        "business_name",
         "website",
+        "website_url",
         "phone",
         "address",
         "lat",
         "lon",
+        "source",
+        "sources",
+        "source_listing_url",
+        "source_id",
         "osm_type",
         "osm_id",
         "osm_shop",
@@ -338,13 +497,15 @@ def write_raw_leads(path: str, leads: List[Dict[str, object]]) -> None:
 
 def build_graded_row(lead: Dict[str, object], graded: Dict[str, object]) -> Dict[str, object]:
     return {
-        "business_name": lead.get("name", ""),
+        "business_name": lead.get("business_name") or lead.get("name", ""),
         "phone": lead.get("phone", ""),
         "address": lead.get("address", ""),
         "lat": lead.get("lat", ""),
         "lon": lead.get("lon", ""),
-        "source": lead.get("osm_type", ""),
-        "source_id": lead.get("osm_id", ""),
+        "source": lead.get("source", ""),
+        "sources": lead.get("sources", lead.get("source", "")),
+        "source_listing_url": lead.get("source_listing_url", ""),
+        "source_id": lead.get("source_id", ""),
         **graded,
     }
 
@@ -357,6 +518,8 @@ def write_graded_report(path: str, rows: List[Dict[str, object]]) -> None:
         "lat",
         "lon",
         "source",
+        "sources",
+        "source_listing_url",
         "source_id",
         "url",
         "reachable",
@@ -690,19 +853,55 @@ def main() -> None:
     args = parse_args()
     terms = parse_terms(args.terms)
 
-    leads = find_businesses(
-        city=args.city,
-        terms=terms,
-        limit=args.limit,
-        radius_km=args.radius_km,
-        overpass_timeout=args.overpass_timeout,
-    )
+    configured_sources = parse_lead_sources()
+    osm_leads: List[Dict[str, object]] = []
+    yelp_leads: List[Dict[str, object]] = []
+    bing_leads: List[Dict[str, object]] = []
+
+    if "osm" in configured_sources:
+        osm_leads = discover_leads_osm(
+            city=args.city,
+            limit=max(args.limit * 2, args.limit),
+            radius_km=args.radius_km,
+            terms=terms,
+            overpass_timeout=args.overpass_timeout,
+        )
+
+    if "yelp" in configured_sources:
+        yelp_leads = discover_leads_yelp(city=args.city, limit=max(args.limit * 2, args.limit), radius_km=args.radius_km)
+
+    if "bing" in configured_sources:
+        bing_leads = discover_leads_bing(city=args.city, limit=max(args.limit * 2, args.limit), radius_km=args.radius_km)
+
+    print(f"OSM leads: {len(osm_leads)}")
+    yelp_key_present = bool(os.getenv("YELP_API_KEY", "").strip())
+    bing_key_present = bool(os.getenv("BING_API_KEY", "").strip())
+    if "yelp" not in configured_sources:
+        print("Yelp leads: 0 (source disabled)")
+    else:
+        print(f"Yelp leads: {len(yelp_leads)}" + ("" if yelp_key_present else " (skipped if no key)"))
+    if "bing" not in configured_sources:
+        print("Bing leads: 0 (source disabled)")
+    else:
+        print(f"Bing leads: {len(bing_leads)}" + ("" if bing_key_present else " (skipped if no key)"))
+
+    discovered_leads = [*osm_leads, *yelp_leads, *bing_leads]
+    deduped = dedupe_leads(discovered_leads)
+    ordered = sort_leads(deduped)
+    leads = ordered[: args.limit]
+    print(f"After dedupe: {len(deduped)} unique leads")
+
     write_raw_leads(RAW_OUTPUT_FILE, leads)
 
-    leads_with_websites = [lead for lead in leads if str(lead.get("website", "")).strip()]
+    leads_with_websites = [lead for lead in leads if str(lead.get("website_url") or lead.get("website") or "").strip()]
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        graded_rows = list(executor.map(lambda lead: grade_website(str(lead["website"])), leads_with_websites))
+        graded_rows = list(
+            executor.map(
+                lambda lead: grade_website(str(lead.get("website_url") or lead.get("website") or "")),
+                leads_with_websites,
+            )
+        )
 
     report_rows = [
         build_graded_row(lead, graded)
