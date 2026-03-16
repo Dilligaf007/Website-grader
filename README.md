@@ -5,7 +5,7 @@ A Python 3.11 script set for grading business websites and exporting CSV reports
 ## Features
 
 - Grades a predefined list of URLs from `websites.txt`
-- Finds local businesses from OpenStreetMap (Overpass) and grades discovered websites
+- Finds local businesses from OpenStreetMap (Overpass) and optionally Yelp/Bing local business search, then grades discovered websites
 - Uses Nominatim geocoding to convert a city name into a center point for radius-based Overpass search
 - Parses HTML with `beautifulsoup4`
 - If a contact page link is found on the homepage, fetches that contact page too
@@ -61,6 +61,17 @@ python find_and_grade.py --city "Austin, TX" --limit 100 --radius_km 30
 python find_and_grade.py --city "Austin, TX" --limit 100 --radius_km 30 --terms "plumbing,drain,sewer"
 ```
 
+Optional lead source environment variables (default keeps OSM-only behavior):
+
+```bash
+export LEAD_SOURCES="osm"                # default
+export LEAD_SOURCES="osm,yelp,bing"      # enable optional API sources
+export YELP_API_KEY="your_yelp_api_key"  # optional, Yelp skipped if missing
+export BING_API_KEY="your_bing_api_key"  # optional, Bing skipped if missing
+```
+
+If an API key is missing, that source is skipped and the pipeline continues without crashing.
+
 For larger lead counts (for example `--limit 200`), tune `--radius_km` to keep Overpass queries focused and reduce timeout risk.
 
 Example (200 leads):
@@ -71,17 +82,20 @@ python find_and_grade.py --city "Austin, TX" --limit 200 --radius_km 25
 
 Outputs:
 
-- `leads_raw.csv`: raw OSM lead fields (`name`, `website`, `phone`, `address`, `lat`, `lon`, `osm_type`, `osm_id`)
+- `leads_raw.csv`: raw lead fields including source metadata (`name`, `business_name`, `website`, `website_url`, `phone`, `address`, `lat`, `lon`, `source`, `sources`, `source_listing_url`, `source_id`, plus OSM-specific fields when applicable)
 - `report.csv`: website grading report for leads that have websites, with leading source columns:
-  - `business_name`, `phone`, `address`, `lat`, `lon`, `source`, `source_id`
+  - `business_name`, `phone`, `address`, `lat`, `lon`, `source`, `sources`, `source_listing_url`, `source_id`
   - followed by grading columns (`url`, `reachable`, `https`, `status_code`, etc.)
   - includes outreach columns: `opportunity_score_0_100` and `pitch`
 - `priority_leads.csv`: outreach-ready subset of actionable leads, filtered and sorted by `opportunity_score_0_100` (highest first). Start calling from this file first when planning outreach.
 
-The OSM pipeline applies basic deduping by:
+Lead deduping is applied before grading with this priority:
 
-- same website URL, or
-- same business name + address.
+- normalized website domain,
+- else normalized phone number,
+- else normalized business name + address.
+
+When duplicates are merged from multiple discovery sources, `sources` records all contributing sources (semicolon-separated).
 
 ## Input format for `main.py`
 
