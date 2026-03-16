@@ -44,6 +44,30 @@ DEFAULT_TERMS = ["plumber", "plumbing", "drain", "sewer", "rooter", "pipe", "wat
 EXCLUDED_AMENITIES = {"school", "college", "university", "kindergarten"}
 EXCLUDED_NAME_TERMS = ["school", "elementary", "middle school", "high school", "academy", "university"]
 PLUMBING_NAME_KEYWORDS = ["plumb", "drain", "sewer", "water heater"]
+DEFAULT_CATEGORY = "plumber"
+CATEGORY_CONFIG: Dict[str, Dict[str, object]] = {
+    "plumber": {
+        "osm_pairs": [("shop", "plumber"), ("craft", "plumber")],
+        "default_terms": DEFAULT_TERMS,
+        "excluded_amenities": EXCLUDED_AMENITIES,
+        "excluded_name_terms": EXCLUDED_NAME_TERMS,
+        "name_keywords": PLUMBING_NAME_KEYWORDS,
+    },
+    "roofer": {
+        "osm_pairs": [("craft", "roofer")],
+        "default_terms": ["roofer", "roofing", "roof repair", "roof replacement"],
+        "excluded_amenities": EXCLUDED_AMENITIES,
+        "excluded_name_terms": EXCLUDED_NAME_TERMS,
+        "name_keywords": ["roof", "roofer", "roofing"],
+    },
+    "hvac": {
+        "osm_pairs": [("craft", "hvac")],
+        "default_terms": ["hvac", "heating", "cooling", "air conditioning", "furnace"],
+        "excluded_amenities": EXCLUDED_AMENITIES,
+        "excluded_name_terms": EXCLUDED_NAME_TERMS,
+        "name_keywords": ["hvac", "heating", "cooling", "air", "furnace", "ac"],
+    },
+}
 
 
 def clean_whitespace(value: str) -> str:
@@ -85,46 +109,81 @@ def build_name_regex(terms: List[str]) -> str:
     return "|".join(escaped_terms)
 
 
-def build_overpass_query(lat: float, lon: float, radius_km: float, terms: List[str], overpass_timeout: int) -> str:
-    del terms
+def build_overpass_query(
+    lat: float,
+    lon: float,
+    radius_km: float,
+    osm_pairs: List[Tuple[str, str]],
+    overpass_timeout: int,
+) -> str:
     radius_m = int(radius_km * 1000)
+    pair_clauses: List[str] = []
+    for key, value in osm_pairs:
+        escaped_key = str(key).strip()
+        escaped_value = str(value).strip()
+        if not escaped_key or not escaped_value:
+            continue
+        pair_clauses.extend(
+            [
+                f'  node["{escaped_key}"="{escaped_value}"](around:{radius_m},{lat},{lon});',
+                f'  way["{escaped_key}"="{escaped_value}"](around:{radius_m},{lat},{lon});',
+                f'  relation["{escaped_key}"="{escaped_value}"](around:{radius_m},{lat},{lon});',
+            ]
+        )
+
+    if not pair_clauses:
+        raise ValueError("No valid OSM tag pairs configured for selected category.")
+
+    clauses_text = "\n".join(pair_clauses)
     return f"""
 [out:json][timeout:{overpass_timeout}];
 (
-  node["shop"="plumber"](around:{radius_m},{lat},{lon});
-  way["shop"="plumber"](around:{radius_m},{lat},{lon});
-  relation["shop"="plumber"](around:{radius_m},{lat},{lon});
-  node["craft"="plumber"](around:{radius_m},{lat},{lon});
-  way["craft"="plumber"](around:{radius_m},{lat},{lon});
-  relation["craft"="plumber"](around:{radius_m},{lat},{lon});
+{clauses_text}
 );
 out center;
 """.strip()
 
 
-def is_target_plumber(tags: Dict[str, str], name: str) -> Tuple[bool, str]:
+def is_target_business(tags: Dict[str, str], name: str, category_config: Dict[str, object]) -> Tuple[bool, str]:
     normalized_tags = {str(k).strip().lower(): str(v).strip().lower() for k, v in (tags or {}).items()}
     normalized_name = (name or "").strip().lower()
+    excluded_amenities = {
+        str(amenity).strip().lower()
+        for amenity in category_config.get("excluded_amenities", EXCLUDED_AMENITIES)
+    }
+    excluded_name_terms = [
+        str(term).strip().lower()
+        for term in category_config.get("excluded_name_terms", EXCLUDED_NAME_TERMS)
+        if str(term).strip()
+    ]
+    osm_pairs = [
+        (str(key).strip().lower(), str(value).strip().lower())
+        for key, value in category_config.get("osm_pairs", [])
+        if str(key).strip() and str(value).strip()
+    ]
+    name_keywords = [
+        str(keyword).strip().lower()
+        for keyword in category_config.get("name_keywords", [])
+        if str(keyword).strip()
+    ]
 
     amenity = normalized_tags.get("amenity", "")
-    if amenity in EXCLUDED_AMENITIES:
+    if amenity in excluded_amenities:
         return False, f"excluded_amenity={amenity}"
 
-    for term in EXCLUDED_NAME_TERMS:
+    for term in excluded_name_terms:
         if term in normalized_name:
             return False, f"excluded_name_term={term}"
 
-    if normalized_tags.get("shop") == "plumber":
-        return True, "shop=plumber"
-    if normalized_tags.get("craft") == "plumber":
-        return True, "craft=plumber"
+    for key, value in osm_pairs:
+        if normalized_tags.get(key) == value:
+            return True, f"{key}={value}"
 
-    if not normalized_tags:
-        for keyword in PLUMBING_NAME_KEYWORDS:
-            if keyword in normalized_name:
-                return True, "name_keyword_fallback"
+    for keyword in name_keywords:
+        if keyword in normalized_name:
+            return True, "name_keyword_fallback"
 
-    return False, "missing_plumber_tag"
+    return False, "missing_category_tag"
 
 
 def fetch_overpass_elements(overpass_query: str, overpass_timeout: int) -> List[Dict[str, object]]:
@@ -204,10 +263,10 @@ def build_address(tags: Dict[str, str]) -> str:
     return clean_whitespace(", ".join(parts))
 
 
-def parse_element(element: Dict[str, object]) -> Dict[str, object]:
+def parse_element(element: Dict[str, object], category: str, category_config: Dict[str, object]) -> Dict[str, object]:
     tags = element.get("tags", {}) or {}
     tags = {str(k): str(v) for k, v in tags.items()}
-    include, inclusion_reason = is_target_plumber(tags, tags.get("name", ""))
+    include, inclusion_reason = is_target_business(tags, tags.get("name", ""), category_config)
 
     lat = element.get("lat")
     lon = element.get("lon")
@@ -236,6 +295,7 @@ def parse_element(element: Dict[str, object]) -> Dict[str, object]:
         "osm_amenity": tags.get("amenity", ""),
         "osm_tags_json": json.dumps(tags, separators=(",", ":"), sort_keys=True),
         "is_target_plumber": include,
+        "category": category,
         "inclusion_reason": inclusion_reason,
         "source": "osm",
         "sources": "osm",
@@ -329,43 +389,64 @@ def sort_leads(leads: List[Dict[str, object]]) -> List[Dict[str, object]]:
 
 def find_businesses(
     city: str,
+    category: str,
     terms: List[str],
     limit: int,
     radius_km: float,
     overpass_timeout: int,
 ) -> List[Dict[str, object]]:
-    return discover_leads_osm(city=city, limit=limit, radius_km=radius_km, terms=terms, overpass_timeout=overpass_timeout)
+    return discover_leads_osm(
+        city=city,
+        category=category,
+        limit=limit,
+        radius_km=radius_km,
+        terms=terms,
+        overpass_timeout=overpass_timeout,
+    )
 
 
 def discover_leads_osm(
     city: str,
+    category: str,
     limit: int,
     radius_km: float,
     terms: Optional[List[str]] = None,
     overpass_timeout: int = 180,
 ) -> List[Dict[str, object]]:
-    terms = terms or DEFAULT_TERMS
+    category_config = CATEGORY_CONFIG[category]
+    terms = terms or list(category_config.get("default_terms", DEFAULT_TERMS))
+    del terms
     lat, lon = get_city_center(city)
     time.sleep(REQUEST_DELAY_SECONDS)
 
-    overpass_query = build_overpass_query(lat, lon, radius_km, terms, overpass_timeout)
+    overpass_query = build_overpass_query(
+        lat,
+        lon,
+        radius_km,
+        list(category_config.get("osm_pairs", [])),
+        overpass_timeout,
+    )
     print("---- OVERPASS QUERY ----")
     print(overpass_query)
     print("------------------------")
     elements = fetch_overpass_elements(overpass_query, overpass_timeout)
-    leads = [lead for lead in (parse_element(element) for element in elements) if is_true(lead.get("is_target_plumber", False))]
+    leads = [
+        lead
+        for lead in (parse_element(element, category=category, category_config=category_config) for element in elements)
+        if is_true(lead.get("is_target_plumber", False))
+    ]
     ordered = sort_leads(leads)
     return ordered[:limit]
 
 
-def discover_leads_yelp(city: str, limit: int, radius_km: float) -> List[Dict[str, object]]:
+def discover_leads_yelp(city: str, limit: int, radius_km: float, category: str) -> List[Dict[str, object]]:
     api_key = os.getenv("YELP_API_KEY", "").strip()
     if not api_key:
         return []
 
     radius_m = min(max(int(radius_km * 1000), 1), 40000)
     params = {
-        "term": "plumber",
+        "term": category,
         "location": city,
         "limit": max(1, min(limit, 50)),
         "radius": radius_m,
@@ -395,6 +476,7 @@ def discover_leads_yelp(city: str, limit: int, radius_km: float) -> List[Dict[st
                 "lat": (business.get("coordinates") or {}).get("latitude", ""),
                 "lon": (business.get("coordinates") or {}).get("longitude", ""),
                 "source": "yelp",
+                "category": category,
                 "source_listing_url": str(business.get("url", "")).strip(),
                 "source_id": str(business.get("id", "")).strip(),
             }
@@ -402,14 +484,14 @@ def discover_leads_yelp(city: str, limit: int, radius_km: float) -> List[Dict[st
     return leads
 
 
-def discover_leads_bing(city: str, limit: int, radius_km: float) -> List[Dict[str, object]]:
+def discover_leads_bing(city: str, limit: int, radius_km: float, category: str) -> List[Dict[str, object]]:
     del radius_km
     api_key = os.getenv("BING_API_KEY", "").strip()
     if not api_key:
         return []
 
     params = {
-        "q": f"plumber in {city}",
+        "q": f"{category} in {city}",
         "count": max(1, min(limit, 50)),
     }
     headers = {"Ocp-Apim-Subscription-Key": api_key, "User-Agent": USER_AGENT}
@@ -437,6 +519,7 @@ def discover_leads_bing(city: str, limit: int, radius_km: float) -> List[Dict[st
                 "lat": (item.get("geo") or {}).get("latitude", ""),
                 "lon": (item.get("geo") or {}).get("longitude", ""),
                 "source": "bing",
+                "category": category,
                 "source_listing_url": str(item.get("url", "")).strip(),
                 "source_id": str(item.get("id", "")).strip(),
             }
@@ -452,9 +535,9 @@ def parse_lead_sources() -> List[str]:
     return normalized or ["osm"]
 
 
-def parse_terms(terms_arg: str) -> List[str]:
+def parse_terms(terms_arg: str, default_terms: List[str]) -> List[str]:
     parsed = [term.strip() for term in terms_arg.split(",") if term.strip()]
-    return parsed or DEFAULT_TERMS.copy()
+    return parsed or default_terms.copy()
 
 
 def write_raw_leads(path: str, leads: List[Dict[str, object]]) -> None:
@@ -477,6 +560,7 @@ def write_raw_leads(path: str, leads: List[Dict[str, object]]) -> None:
         "osm_craft",
         "osm_amenity",
         "osm_tags_json",
+        "category",
         "inclusion_reason",
     ]
     extra_fieldnames = sorted(
@@ -506,6 +590,7 @@ def build_graded_row(lead: Dict[str, object], graded: Dict[str, object]) -> Dict
         "sources": lead.get("sources", lead.get("source", "")),
         "source_listing_url": lead.get("source_listing_url", ""),
         "source_id": lead.get("source_id", ""),
+        "category": lead.get("category", ""),
         **graded,
     }
 
@@ -521,6 +606,7 @@ def write_graded_report(path: str, rows: List[Dict[str, object]]) -> None:
         "sources",
         "source_listing_url",
         "source_id",
+        "category",
         "url",
         "reachable",
         "https",
@@ -825,6 +911,11 @@ def write_outreach_sheet(path: str, prioritized_rows: List[Dict[str, object]], c
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Find and grade local businesses from OpenStreetMap.")
     parser.add_argument("--city", required=True, help="City name to search (e.g. 'Austin, TX').")
+    parser.add_argument(
+        "--category",
+        default=DEFAULT_CATEGORY,
+        help=f"Business category to search (allowed: {', '.join(sorted(CATEGORY_CONFIG.keys()))}; default: {DEFAULT_CATEGORY}).",
+    )
     parser.add_argument("--limit", type=int, default=50, help="Maximum number of unique leads (default: 50).")
     parser.add_argument(
         "--radius_km",
@@ -851,7 +942,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    terms = parse_terms(args.terms)
+    category = str(args.category).strip().lower()
+    if category not in CATEGORY_CONFIG:
+        allowed = ", ".join(sorted(CATEGORY_CONFIG.keys()))
+        raise ValueError(f"Unsupported category '{args.category}'. Allowed categories: {allowed}")
+
+    category_config = CATEGORY_CONFIG[category]
+    terms = parse_terms(args.terms, list(category_config.get("default_terms", DEFAULT_TERMS)))
 
     configured_sources = parse_lead_sources()
     osm_leads: List[Dict[str, object]] = []
@@ -861,6 +958,7 @@ def main() -> None:
     if "osm" in configured_sources:
         osm_leads = discover_leads_osm(
             city=args.city,
+            category=category,
             limit=max(args.limit * 2, args.limit),
             radius_km=args.radius_km,
             terms=terms,
@@ -868,10 +966,20 @@ def main() -> None:
         )
 
     if "yelp" in configured_sources:
-        yelp_leads = discover_leads_yelp(city=args.city, limit=max(args.limit * 2, args.limit), radius_km=args.radius_km)
+        yelp_leads = discover_leads_yelp(
+            city=args.city,
+            limit=max(args.limit * 2, args.limit),
+            radius_km=args.radius_km,
+            category=category,
+        )
 
     if "bing" in configured_sources:
-        bing_leads = discover_leads_bing(city=args.city, limit=max(args.limit * 2, args.limit), radius_km=args.radius_km)
+        bing_leads = discover_leads_bing(
+            city=args.city,
+            limit=max(args.limit * 2, args.limit),
+            radius_km=args.radius_km,
+            category=category,
+        )
 
     print(f"OSM leads: {len(osm_leads)}")
     yelp_key_present = bool(os.getenv("YELP_API_KEY", "").strip())
