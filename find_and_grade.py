@@ -65,7 +65,7 @@ CATEGORY_CONFIG: Dict[str, Dict[str, object]] = {
         "default_terms": ["hvac", "heating", "cooling", "air conditioning", "furnace"],
         "excluded_amenities": EXCLUDED_AMENITIES,
         "excluded_name_terms": EXCLUDED_NAME_TERMS,
-        "name_keywords": ["hvac", "heating", "cooling", "air", "furnace", "ac"],
+        "name_keywords": ["hvac", "heating", "cooling", "air conditioning", "furnace"],
     },
 }
 
@@ -294,7 +294,7 @@ def parse_element(element: Dict[str, object], category: str, category_config: Di
         "osm_craft": tags.get("craft", ""),
         "osm_amenity": tags.get("amenity", ""),
         "osm_tags_json": json.dumps(tags, separators=(",", ":"), sort_keys=True),
-        "is_target_plumber": include,
+        "is_target_business": include,
         "category": category,
         "inclusion_reason": inclusion_reason,
         "source": "osm",
@@ -415,7 +415,7 @@ def discover_leads_osm(
 ) -> List[Dict[str, object]]:
     category_config = CATEGORY_CONFIG[category]
     terms = terms or list(category_config.get("default_terms", DEFAULT_TERMS))
-    del terms
+    normalized_terms = [term.strip().lower() for term in terms if term.strip()]
     lat, lon = get_city_center(city)
     time.sleep(REQUEST_DELAY_SECONDS)
 
@@ -430,11 +430,18 @@ def discover_leads_osm(
     print(overpass_query)
     print("------------------------")
     elements = fetch_overpass_elements(overpass_query, overpass_timeout)
-    leads = [
-        lead
-        for lead in (parse_element(element, category=category, category_config=category_config) for element in elements)
-        if is_true(lead.get("is_target_plumber", False))
-    ]
+    leads: List[Dict[str, object]] = []
+    for lead in (parse_element(element, category=category, category_config=category_config) for element in elements):
+        if is_true(lead.get("is_target_business", False)):
+            leads.append(lead)
+            continue
+
+        lead_name = str(lead.get("name", "")).strip().lower()
+        if lead_name and any(term in lead_name for term in normalized_terms):
+            lead["is_target_business"] = True
+            lead["inclusion_reason"] = "terms_name_fallback"
+            leads.append(lead)
+
     ordered = sort_leads(leads)
     return ordered[:limit]
 
@@ -797,23 +804,30 @@ def build_email_content(row: Dict[str, object]) -> Tuple[str, str]:
     return subject, body
 
 
-def build_form_message(row: Dict[str, object], city_name: str) -> str:
+def category_label(category: object) -> str:
+    value = str(category or "business").strip().lower()
+    return value.replace("_", " ") if value else "business"
+
+
+def build_form_message(row: Dict[str, object], city_name: str, category: str) -> str:
     business_name = str(row.get("business_name", "your business")).strip() or "your business"
     specific_issue = clean_specific_issue(row.get("reasons", ""), row.get("pitch", ""))
     city_fragment = f" in {city_name}" if city_name else ""
+    category_text = category_label(category)
     return (
-        f"Hi {business_name} team — I ran a quick website audit for local plumbing companies{city_fragment} and spotted one issue: "
+        f"Hi {business_name} team — I ran a quick website audit for local {category_text} companies{city_fragment} and spotted one issue: "
         f"{specific_issue}. I can send a short 3-step fix plan to improve inbound leads. "
         "Would you like me to share it here?"
     )
 
 
-def build_call_script(row: Dict[str, object], city_name: str) -> str:
+def build_call_script(row: Dict[str, object], city_name: str, category: str) -> str:
     business_name = str(row.get("business_name", "your business")).strip() or "your business"
     specific_issue = clean_specific_issue(row.get("reasons", ""), row.get("pitch", ""))
     city_fragment = f" in {city_name}" if city_name else ""
+    category_text = category_label(category)
     return (
-        f"Hi, this is Nathan — I did a quick website audit for {business_name}{city_fragment} and noticed one issue: {specific_issue}. "
+        f"Hi, this is Nathan — I did a quick website audit for a local {category_text} company, {business_name}{city_fragment}, and noticed one issue: {specific_issue}. "
         "Could you point me to who handles your website, or the best email where I can send a short 3-step plan?"
     )
 
@@ -826,8 +840,9 @@ def populate_channel_messages(rows: List[Dict[str, object]], city_name: str) -> 
             row["call_script"] = ""
             continue
 
-        row["form_message"] = build_form_message(row, city_name)
-        row["call_script"] = build_call_script(row, city_name)
+        category = str(row.get("category", "")).strip()
+        row["form_message"] = build_form_message(row, city_name, category)
+        row["call_script"] = build_call_script(row, city_name, category)
 
 
 def write_outreach_sheet(path: str, prioritized_rows: List[Dict[str, object]], city_name: str) -> None:
@@ -927,8 +942,8 @@ def parse_args() -> argparse.Namespace:
         "--terms",
         default=",".join(DEFAULT_TERMS),
         help=(
-            "Comma-separated terms for case-insensitive business name matching "
-            "(default: plumber,plumbing,drain,sewer,rooter,pipe,water heater)."
+            "Comma-separated terms for case-insensitive business name fallback matching. "
+            "Defaults to the selected category's configured terms when not provided."
         ),
     )
     parser.add_argument(
